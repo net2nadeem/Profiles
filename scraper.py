@@ -547,3 +547,110 @@ def export_to_google_sheets(profiles_batch, tags_mapping):
                         worksheet.update(range_name, [row])
                         
                         # Highlight updated row with light mustard
+                        worksheet.format(f'A{row_index}:N{row_index}', {
+                            "backgroundColor": HIGHLIGHT_COLOR
+                        })
+                        
+                        updated_count += 1
+                        stats.updated_profiles += 1
+                        log_msg(f"🔄 Updated {nickname} (highlighted)", "INFO")
+                        
+                    except Exception as e:
+                        log_msg(f"❌ Failed to update {nickname}: {e}", "ERROR")
+                else:
+                    log_msg(f"➡️ {nickname} - No changes needed", "INFO")
+            else:
+                # Add new profile
+                try:
+                    worksheet.append_row(row)
+                    new_count += 1
+                    stats.new_profiles += 1
+                    log_msg(f"✅ Added new profile: {nickname}", "SUCCESS")
+                except Exception as e:
+                    log_msg(f"❌ Failed to add {nickname}: {e}", "ERROR")
+        
+        log_msg(f"📊 Export complete: {new_count} new, {updated_count} updated", "SUCCESS")
+        return True
+        
+    except Exception as e:
+        log_msg(f"❌ Google Sheets export failed: {e}", "ERROR")
+        return False
+
+# === MAIN EXECUTION ===
+def main():
+    """Enhanced main execution with better error handling"""
+    log_msg("🚀 Starting DamaDam Profile Scraper (Optimized)", "INFO")
+    
+    # Setup browser
+    driver = setup_github_browser()
+    if not driver:
+        log_msg("❌ Failed to setup browser", "ERROR")
+        return
+    
+    try:
+        # Login
+        if not login_to_damadam(driver):
+            log_msg("❌ Authentication failed", "ERROR")
+            return
+        
+        # Get Google Sheets client and tags mapping
+        client = get_google_sheets_client()
+        if not client:
+            log_msg("❌ Failed to connect to Google Sheets", "ERROR")
+            return
+            
+        tags_mapping = get_tags_mapping(client, SHEET_URL)
+        
+        # Get online users
+        users = get_online_users(driver)
+        if not users:
+            log_msg("❌ No online users found", "ERROR")
+            return
+        
+        stats.total = len(users)
+        scraped_profiles = []
+        batch_size = 10
+        
+        # Scrape profiles with batch processing
+        for i, nickname in enumerate(users, 1):
+            stats.current = i
+            
+            log_msg(f"🔍 Scraping {nickname} ({i}/{stats.total})", "INFO")
+            profile = scrape_profile(driver, nickname)
+            
+            if profile:
+                scraped_profiles.append(profile)
+                stats.success += 1
+                
+                # Export in batches
+                if len(scraped_profiles) >= batch_size:
+                    export_to_google_sheets(scraped_profiles, tags_mapping)
+                    scraped_profiles = []  # Clear batch
+                    
+            else:
+                stats.errors += 1
+            
+            # Smart delay to avoid detection
+            delay = random.uniform(MIN_DELAY, MAX_DELAY)
+            time.sleep(delay)
+        
+        # Export remaining profiles
+        if scraped_profiles:
+            export_to_google_sheets(scraped_profiles, tags_mapping)
+        
+        # Final summary
+        stats.show_summary()
+        
+    except KeyboardInterrupt:
+        log_msg("⏹️ Scraping interrupted by user", "WARNING")
+    except Exception as e:
+        log_msg(f"❌ Execution error: {e}", "ERROR")
+    finally:
+        try:
+            driver.quit()
+        except:
+            pass
+        log_msg("🏁 Scraper completed", "INFO")
+
+if __name__ == "__main__":
+    main()
