@@ -171,46 +171,145 @@ def setup_github_browser():
 
 # === AUTHENTICATION ===
 def login_to_damadam(driver):
-    """Login to DamaDam with better error handling"""
+    """Enhanced login with comprehensive debugging and multiple strategies"""
     try:
         log_msg("🔐 Logging in to DamaDam...")
         driver.get(LOGIN_URL)
         
-        # Wait for login form
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.ID, "nick"))
-        )
+        # Wait for page to load completely
+        time.sleep(3)
         
-        # Enter credentials
-        driver.find_element(By.ID, "nick").clear()
-        driver.find_element(By.ID, "nick").send_keys(USERNAME)
-        driver.find_element(By.ID, "pass").clear()
-        driver.find_element(By.ID, "pass").send_keys(PASSWORD)
-        driver.find_element(By.CSS_SELECTOR, "form button").click()
+        # Debug: Check what page we're on
+        current_url = driver.current_url
+        page_title = driver.title
+        log_msg(f"📍 Current URL: {current_url}", "INFO")
+        log_msg(f"📄 Page title: {page_title}", "INFO")
         
-        # Wait for login to complete
-        time.sleep(LOGIN_DELAY)
+        # Try multiple selectors for login form
+        login_selectors = [
+            {"nick": "#nick", "pass": "#pass", "button": "form button"},
+            {"nick": "input[name='nick']", "pass": "input[name='pass']", "button": "button[type='submit']"},
+            {"nick": "input[placeholder*='nick']", "pass": "input[type='password']", "button": ".btn"},
+            {"nick": "[name='username']", "pass": "[name='password']", "button": "input[type='submit']"},
+        ]
         
-        # Check login success
-        if "login" not in driver.current_url.lower() and "dashboard" not in driver.current_url.lower():
-            # Additional check - look for user-specific elements
+        form_found = False
+        for i, selectors in enumerate(login_selectors):
             try:
-                WebDriverWait(driver, 5).until(
-                    EC.any_of(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "[href*='logout']")),
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "[href*='profile']"))
-                    )
+                log_msg(f"🔍 Trying login method {i+1}...", "INFO")
+                
+                # Wait for form elements
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, selectors["nick"]))
                 )
-                log_msg("✅ Login successful", "SUCCESS")
-                return True
+                
+                nick_field = driver.find_element(By.CSS_SELECTOR, selectors["nick"])
+                pass_field = driver.find_element(By.CSS_SELECTOR, selectors["pass"])
+                submit_btn = driver.find_element(By.CSS_SELECTOR, selectors["button"])
+                
+                log_msg(f"✅ Found login form with method {i+1}", "SUCCESS")
+                
+                # Clear and fill fields
+                nick_field.clear()
+                time.sleep(0.5)
+                nick_field.send_keys(USERNAME)
+                
+                pass_field.clear()
+                time.sleep(0.5)
+                pass_field.send_keys(PASSWORD)
+                
+                # Debug: Check field values
+                nick_value = nick_field.get_attribute('value')
+                pass_length = len(pass_field.get_attribute('value'))
+                log_msg(f"📝 Username filled: {nick_value[:3]}***", "INFO")
+                log_msg(f"📝 Password filled: {pass_length} characters", "INFO")
+                
+                # Submit form
+                log_msg("🚀 Submitting login form...", "INFO")
+                submit_btn.click()
+                form_found = True
+                break
+                
+            except Exception as e:
+                log_msg(f"⚠️ Login method {i+1} failed: {e}", "WARNING")
+                continue
+        
+        if not form_found:
+            log_msg("❌ No login form found with any method", "ERROR")
+            # Debug: Save page source for analysis
+            try:
+                with open("login_page_debug.html", "w", encoding="utf-8") as f:
+                    f.write(driver.page_source)
+                log_msg("🔍 Login page saved as login_page_debug.html for analysis", "INFO")
             except:
                 pass
+            return False
         
-        log_msg("❌ Login failed - authentication unsuccessful", "ERROR")
-        return False
+        # Wait for login to process
+        log_msg("⏳ Waiting for login to process...", "INFO")
+        time.sleep(LOGIN_DELAY)
+        
+        # Check login success with multiple indicators
+        current_url_after = driver.current_url
+        log_msg(f"📍 URL after login: {current_url_after}", "INFO")
+        
+        # Multiple success checks
+        success_indicators = [
+            lambda: "login" not in driver.current_url.lower(),
+            lambda: "dashboard" in driver.current_url.lower() or "profile" in driver.current_url.lower(),
+            lambda: any(driver.find_elements(By.CSS_SELECTOR, selector) for selector in [
+                "[href*='logout']", "[href*='profile']", ".user-menu", ".logout"
+            ]),
+            lambda: not any(driver.find_elements(By.CSS_SELECTOR, selector) for selector in [
+                "#nick", "input[name='nick']", ".login-form"
+            ])
+        ]
+        
+        login_success = False
+        for i, check in enumerate(success_indicators):
+            try:
+                if check():
+                    log_msg(f"✅ Login success indicator {i+1} passed", "SUCCESS")
+                    login_success = True
+                    break
+            except Exception as e:
+                log_msg(f"⚠️ Success check {i+1} failed: {e}", "WARNING")
+        
+        if login_success:
+            log_msg("✅ Login successful!", "SUCCESS")
+            return True
+        else:
+            # Check for error messages
+            error_selectors = [".error", ".alert", "[class*='error']", "[class*='alert']"]
+            for selector in error_selectors:
+                try:
+                    error_elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for elem in error_elements:
+                        if elem.text.strip():
+                            log_msg(f"🚨 Error message: {elem.text.strip()}", "ERROR")
+                except:
+                    pass
+            
+            log_msg("❌ Login failed - no success indicators found", "ERROR")
+            
+            # Debug: Save post-login page
+            try:
+                with open("post_login_debug.html", "w", encoding="utf-8") as f:
+                    f.write(driver.page_source)
+                log_msg("🔍 Post-login page saved as post_login_debug.html", "INFO")
+            except:
+                pass
+                
+            return False
             
     except Exception as e:
         log_msg(f"❌ Login error: {e}", "ERROR")
+        try:
+            with open("login_error_debug.html", "w", encoding="utf-8") as f:
+                f.write(driver.page_source)
+            log_msg("🔍 Error page saved as login_error_debug.html", "INFO")
+        except:
+            pass
         return False
 
 # === USER FETCHING ===
