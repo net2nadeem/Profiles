@@ -66,11 +66,18 @@ jobs:
         which google-chrome
         
     - name: 🔐 Set Environment Variables
+      env:
+        DAMADAM_USERNAME: ${{ secrets.DAMADAM_USERNAME }}
+        DAMADAM_PASSWORD: ${{ secrets.DAMADAM_PASSWORD }}
+        GOOGLE_SHEET_URL: ${{ secrets.GOOGLE_SHEET_URL }}
+        GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       run: |
-        echo "DAMADAM_USERNAME=${{ secrets.DAMADAM_USERNAME }}" >> $GITHUB_ENV
-        echo "DAMADAM_PASSWORD=${{ secrets.DAMADAM_PASSWORD }}" >> $GITHUB_ENV
-        echo "GOOGLE_SHEET_URL=${{ secrets.GOOGLE_SHEET_URL }}" >> $GITHUB_ENV
-        echo "GOOGLE_SERVICE_ACCOUNT_JSON=${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}" >> $GITHUB_ENV
+        echo "DAMADAM_USERNAME=$DAMADAM_USERNAME" >> $GITHUB_ENV
+        echo "DAMADAM_PASSWORD=$DAMADAM_PASSWORD" >> $GITHUB_ENV
+        echo "GOOGLE_SHEET_URL=$GOOGLE_SHEET_URL" >> $GITHUB_ENV
+        echo "GOOGLE_SERVICE_ACCOUNT_JSON<<EOF" >> $GITHUB_ENV
+        echo "$GOOGLE_SERVICE_ACCOUNT_JSON" >> $GITHUB_ENV
+        echo "EOF" >> $GITHUB_ENV
         
     - name: 🔍 Validate Environment Variables
       run: |
@@ -90,7 +97,14 @@ jobs:
           echo "❌ GOOGLE_SERVICE_ACCOUNT_JSON is not set"
           exit 1
         fi
-        echo "✅ All environment variables are set"
+        # Validate JSON format
+        echo "$GOOGLE_SERVICE_ACCOUNT_JSON" | python -m json.tool > /dev/null
+        if [ $? -eq 0 ]; then
+          echo "✅ All environment variables are set and JSON is valid"
+        else
+          echo "❌ GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON"
+          exit 1
+        fi
         
     - name: 🚀 Run DamaDam Scraper
       run: |
