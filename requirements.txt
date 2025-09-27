@@ -1,0 +1,22 @@
+# DamaDam Profile Scraper Dependencies
+
+# Web scraping and automation
+selenium==4.15.2
+webdriver-manager==4.0.1
+
+# Google Sheets integration
+gspread==5.12.0
+oauth2client==4.1.3
+
+# Utility and formatting
+colorama==0.4.6
+requests==2.31.0
+
+# Optional: Additional utilities
+python-dotenv==1.0.0  # For local development with .env files
+Pillow==10.0.1        # Image processing (if needed)
+
+# Development dependencies (optional)
+# pytest==7.4.3        # For testing
+# black==23.9.1         # Code formatting
+# flake8==6.1.0         # Code linting
