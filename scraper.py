@@ -105,21 +105,12 @@ class ScraperStats:
         elapsed = str(datetime.now() - self.start_time).split('.')[0]
         print(f"\n{Fore.MAGENTA}📊 FINAL SUMMARY:")
         print(f"⏱️  Total Time: {elapsed}")
-        print(f"🎯 Target Users: {self.total}")
+        print(f"👥 Users Found: {self.total}")
         print(f"✅ Successfully Scraped: {self.success}")
         print(f"❌ Errors: {self.errors}")
         print(f"🆕 New Profiles: {self.new_profiles}")
         print(f"🔄 Updated Profiles: {self.updated_profiles}")
-        print(f"🏷️  Tags Processed: {self.tags_processed}")
-        
-        # Target completion stats
-        if self.total > 0:
-            completion_rate = (self.success / self.total * 100)
-            remaining = self.total - self.success
-            print(f"📈 Completion Rate: {completion_rate:.1f}%")
-            print(f"⏳ Remaining: {remaining} users pending")
-        
-        print(f"{Style.RESET_ALL}")
+        print(f"🏷️  Tags Processed: {self.tags_processed}{Style.RESET_ALL}")
         print("-" * 50)
 
 stats = ScraperStats()
@@ -321,76 +312,33 @@ def login_to_damadam(driver):
             pass
         return False
 
-# === TARGET USERS MANAGEMENT ===
-def get_target_users(client, sheet_url):
-    """Get target users from Target sheet"""
+# === USER FETCHING ===
+def get_online_users(driver):
+    """Get online users with better error handling"""
     try:
-        log_msg("🎯 Loading target users from Target sheet...")
-        workbook = client.open_by_url(sheet_url)
+        log_msg("👥 Fetching online users...")
+        driver.get(ONLINE_USERS_URL)
         
-        # Try to access Target sheet
-        try:
-            target_sheet = workbook.worksheet("Target")
-        except:
-            log_msg("❌ Target sheet not found! Please create 'Target' sheet with columns: USERNAME | STATUS | LAST_SCRAPED | NOTES", "ERROR")
-            return []
+        # Wait for user list
+        WebDriverWait(driver, PAGE_LOAD_TIMEOUT).until(
+            EC.presence_of_all_elements_located((By.CSS_SELECTOR, "li bdi"))
+        )
         
-        # Get all values from Target sheet
-        target_data = target_sheet.get_all_values()
-        if not target_data or len(target_data) < 2:
-            log_msg("⚠️ Target sheet is empty or has no data rows", "WARNING")
-            return []
+        # Extract unique usernames
+        users = []
+        elements = driver.find_elements(By.CSS_SELECTOR, "li bdi")
         
-        headers = target_data[0]
-        if len(headers) < 2 or 'USERNAME' not in headers[0].upper() or 'STATUS' not in headers[1].upper():
-            log_msg("❌ Target sheet headers incorrect. Expected: USERNAME | STATUS | LAST_SCRAPED | NOTES", "ERROR")
-            return []
+        for elem in elements:
+            username = elem.text.strip()
+            if username and username not in users:
+                users.append(username)
         
-        # Extract pending users
-        pending_users = []
-        for i, row in enumerate(target_data[1:], 2):  # Start from row 2
-            if len(row) >= 2:
-                username = row[0].strip()
-                status = row[1].strip().upper()
-                
-                if username and status == 'PENDING':
-                    pending_users.append({
-                        'username': username,
-                        'row_index': i,
-                        'status': status
-                    })
-        
-        log_msg(f"✅ Found {len(pending_users)} pending users to scrape", "SUCCESS")
-        return pending_users
+        log_msg(f"✅ Found {len(users)} unique online users", "SUCCESS")
+        return users
         
     except Exception as e:
-        log_msg(f"❌ Failed to load target users: {e}", "ERROR")
+        log_msg(f"❌ Failed to get users: {e}", "ERROR")
         return []
-
-def update_target_status(client, sheet_url, row_index, status, notes=""):
-    """Update status of a target user"""
-    try:
-        workbook = client.open_by_url(sheet_url)
-        target_sheet = workbook.worksheet("Target")
-        
-        # Update status (column B)
-        target_sheet.update_cell(row_index, 2, status)
-        
-        # Update last scraped date (column C) if completed
-        if status.upper() == 'COMPLETED':
-            from datetime import datetime
-            target_sheet.update_cell(row_index, 3, datetime.now().strftime("%Y-%m-%d %H:%M"))
-        
-        # Update notes (column D) if provided
-        if notes:
-            target_sheet.update_cell(row_index, 4, notes)
-            
-        log_msg(f"✅ Updated target status: {status}", "SUCCESS")
-        return True
-        
-    except Exception as e:
-        log_msg(f"❌ Failed to update target status: {e}", "ERROR")
-        return False
 
 # === PROFILE SCRAPING ===
 def scrape_profile(driver, nickname):
@@ -599,13 +547,13 @@ def get_tags_for_nickname(nickname, tags_mapping):
     tags = tags_mapping[nickname]
     return ", ".join(tags) if tags else ""
 
-def export_to_google_sheets(profiles_batch, tags_mapping, target_updates=None):
-    """Enhanced Google Sheets export with smart updates and target status tracking"""
-    if not profiles_batch and not target_updates:
+def export_to_google_sheets(profiles_batch, tags_mapping):
+    """Enhanced Google Sheets export with smart updates"""
+    if not profiles_batch:
         return False
         
     try:
-        log_msg(f"📊 Processing Google Sheets updates...", "INFO")
+        log_msg(f"📊 Processing {len(profiles_batch)} profiles for Google Sheets...", "INFO")
         
         client = get_google_sheets_client()
         if not client:
@@ -614,35 +562,6 @@ def export_to_google_sheets(profiles_batch, tags_mapping, target_updates=None):
         workbook = client.open_by_url(SHEET_URL)
         worksheet = workbook.sheet1
         
-        # Handle target status updates first
-        if target_updates:
-            try:
-                target_sheet = workbook.worksheet("Target")
-                for update in target_updates:
-                    row_idx = update['row_index']
-                    status = update['status']
-                    notes = update.get('notes', '')
-                    
-                    # Update status column (B)
-                    target_sheet.update_cell(row_idx, 2, status)
-                    
-                    # Update last scraped (C) if completed
-                    if status.upper() == 'COMPLETED':
-                        from datetime import datetime
-                        target_sheet.update_cell(row_idx, 3, datetime.now().strftime("%Y-%m-%d %H:%M"))
-                    
-                    # Update notes (D) if provided
-                    if notes:
-                        target_sheet.update_cell(row_idx, 4, notes)
-                        
-                log_msg(f"✅ Updated {len(target_updates)} target statuses", "SUCCESS")
-            except Exception as e:
-                log_msg(f"⚠️ Failed to update target statuses: {e}", "WARNING")
-        
-        # Process profile data if available
-        if not profiles_batch:
-            return True
-            
         # Setup headers (removed SCOUNT)
         headers = ["DATE","TIME","NICKNAME","TAGS","CITY","GENDER","MARRIED","AGE",
                    "JOINED","FOLLOWERS","POSTS","PLINK","PIMAGE","INTRO"]
@@ -717,13 +636,23 @@ def export_to_google_sheets(profiles_batch, tags_mapping, target_updates=None):
                 
                 if needs_update:
                     try:
-                        # Update the row (no highlighting since no one watches)
+                        # Clear background formatting first
+                        worksheet.format(f'A{row_index}:N{row_index}', {
+                            "backgroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0}
+                        })
+                        
+                        # Update the row
                         range_name = f'A{row_index}:N{row_index}'
                         worksheet.update(range_name, [row])
                         
+                        # Highlight updated row with light mustard
+                        worksheet.format(f'A{row_index}:N{row_index}', {
+                            "backgroundColor": HIGHLIGHT_COLOR
+                        })
+                        
                         updated_count += 1
                         stats.updated_profiles += 1
-                        log_msg(f"🔄 Updated {nickname}", "INFO")
+                        log_msg(f"🔄 Updated {nickname} (highlighted)", "INFO")
                         
                     except Exception as e:
                         log_msg(f"❌ Failed to update {nickname}: {e}", "ERROR")
@@ -748,8 +677,8 @@ def export_to_google_sheets(profiles_batch, tags_mapping, target_updates=None):
 
 # === MAIN EXECUTION ===
 def main():
-    """Enhanced main execution with target user processing"""
-    log_msg("🚀 Starting DamaDam Profile Scraper (Target Mode)", "INFO")
+    """Enhanced main execution with better error handling"""
+    log_msg("🚀 Starting DamaDam Profile Scraper (Optimized)", "INFO")
     
     # Setup browser
     driver = setup_github_browser()
@@ -771,89 +700,45 @@ def main():
             
         tags_mapping = get_tags_mapping(client, SHEET_URL)
         
-        # Get target users instead of online users
-        target_users = get_target_users(client, SHEET_URL)
-        if not target_users:
-            log_msg("❌ No target users found or Target sheet not configured", "ERROR")
+        # Get online users
+        users = get_online_users(driver)
+        if not users:
+            log_msg("❌ No online users found", "ERROR")
             return
         
-        stats.total = len(target_users)
+        stats.total = len(users)
         scraped_profiles = []
-        target_updates = []
-        batch_size = 5  # Smaller batch for more frequent updates
+        batch_size = 10
         
-        log_msg(f"🎯 Processing {stats.total} target users...", "INFO")
-        
-        # Scrape target profiles
-        for i, target_user in enumerate(target_users, 1):
+        # Scrape profiles with batch processing
+        for i, nickname in enumerate(users, 1):
             stats.current = i
-            nickname = target_user['username']
-            row_index = target_user['row_index']
             
-            log_msg(f"🔍 Scraping target user: {nickname} ({i}/{stats.total})", "INFO")
+            log_msg(f"🔍 Scraping {nickname} ({i}/{stats.total})", "INFO")
+            profile = scrape_profile(driver, nickname)
             
-            try:
-                profile = scrape_profile(driver, nickname)
+            if profile:
+                scraped_profiles.append(profile)
+                stats.success += 1
                 
-                if profile:
-                    scraped_profiles.append(profile)
-                    stats.success += 1
-                    
-                    # Mark as completed in target updates
-                    target_updates.append({
-                        'row_index': row_index,
-                        'status': 'Completed',
-                        'notes': 'Successfully scraped'
-                    })
-                    
-                    log_msg(f"✅ Successfully scraped: {nickname}", "SUCCESS")
-                    
-                else:
-                    stats.errors += 1
-                    # Mark as failed (keep as Pending for retry)
-                    target_updates.append({
-                        'row_index': row_index,
-                        'status': 'Pending',
-                        'notes': 'Scraping failed - will retry'
-                    })
-                    log_msg(f"❌ Failed to scrape: {nickname}", "ERROR")
-                
-                # Export in batches with target updates
-                if len(scraped_profiles) >= batch_size or len(target_updates) >= batch_size:
-                    export_to_google_sheets(scraped_profiles, tags_mapping, target_updates)
+                # Export in batches
+                if len(scraped_profiles) >= batch_size:
+                    export_to_google_sheets(scraped_profiles, tags_mapping)
                     scraped_profiles = []  # Clear batch
-                    target_updates = []   # Clear updates
                     
-            except Exception as e:
+            else:
                 stats.errors += 1
-                log_msg(f"❌ Error processing {nickname}: {e}", "ERROR")
-                
-                # Mark as failed
-                target_updates.append({
-                    'row_index': row_index,
-                    'status': 'Pending',
-                    'notes': f'Error: {str(e)[:100]}'
-                })
             
             # Smart delay to avoid detection
             delay = random.uniform(MIN_DELAY, MAX_DELAY)
             time.sleep(delay)
         
-        # Export remaining profiles and updates
-        if scraped_profiles or target_updates:
-            export_to_google_sheets(scraped_profiles, tags_mapping, target_updates)
+        # Export remaining profiles
+        if scraped_profiles:
+            export_to_google_sheets(scraped_profiles, tags_mapping)
         
         # Final summary
         stats.show_summary()
-        
-        # Show target completion status
-        completed = stats.success
-        total_targets = stats.total
-        completion_rate = (completed / total_targets * 100) if total_targets > 0 else 0
-        
-        log_msg(f"🎯 Target Processing Complete:", "INFO")
-        log_msg(f"   Completed: {completed}/{total_targets} ({completion_rate:.1f}%)", "INFO")
-        log_msg(f"   Remaining: {total_targets - completed} users still pending", "INFO")
         
     except KeyboardInterrupt:
         log_msg("⏹️ Scraping interrupted by user", "WARNING")
