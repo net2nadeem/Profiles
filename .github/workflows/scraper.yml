@@ -1,0 +1,148 @@
+name: DamaDam Profile Scraper
+
+on:
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      batch_size:
+        description: 'Batch size for processing'
+        required: false
+        default: '10'
+        type: string
+      max_users:
+        description: 'Maximum users to scrape (0 = no limit)'
+        required: false
+        default: '0'
+        type: string
+  
+  # Automatic schedule - runs every 6 hours
+  schedule:
+    - cron: '0 */6 * * *'
+  
+  # For testing
+  push:
+    branches: [ main ]
+    paths: [ 'scraper.py', '.github/workflows/scraper.yml' ]
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        python-version: [3.9]
+    
+    steps:
+    - name: 📥 Checkout Repository
+      uses: actions/checkout@v4
+      
+    - name: 🐍 Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: 🧰 Cache Python Dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: 📦 Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: 🌐 Setup Chrome
+      uses: browser-actions/setup-chrome@latest
+      with:
+        chrome-version: stable
+        
+    - name: 🔧 Verify Chrome Installation
+      run: |
+        google-chrome --version
+        which google-chrome
+        
+    - name: 🔐 Set Environment Variables
+      run: |
+        echo "DAMADAM_USERNAME=${{ secrets.DAMADAM_USERNAME }}" >> $GITHUB_ENV
+        echo "DAMADAM_PASSWORD=${{ secrets.DAMADAM_PASSWORD }}" >> $GITHUB_ENV
+        echo "GOOGLE_SHEET_URL=${{ secrets.GOOGLE_SHEET_URL }}" >> $GITHUB_ENV
+        echo "GOOGLE_SERVICE_ACCOUNT_JSON=${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}" >> $GITHUB_ENV
+        
+    - name: 🔍 Validate Environment Variables
+      run: |
+        if [ -z "$DAMADAM_USERNAME" ]; then
+          echo "❌ DAMADAM_USERNAME is not set"
+          exit 1
+        fi
+        if [ -z "$DAMADAM_PASSWORD" ]; then
+          echo "❌ DAMADAM_PASSWORD is not set"
+          exit 1
+        fi
+        if [ -z "$GOOGLE_SHEET_URL" ]; then
+          echo "❌ GOOGLE_SHEET_URL is not set"
+          exit 1
+        fi
+        if [ -z "$GOOGLE_SERVICE_ACCOUNT_JSON" ]; then
+          echo "❌ GOOGLE_SERVICE_ACCOUNT_JSON is not set"
+          exit 1
+        fi
+        echo "✅ All environment variables are set"
+        
+    - name: 🚀 Run DamaDam Scraper
+      run: |
+        echo "🚀 Starting DamaDam Profile Scraper..."
+        echo "⏰ Execution time: $(date)"
+        echo "🖥️ Runner: ${{ runner.os }}"
+        echo "🐍 Python: ${{ matrix.python-version }}"
+        
+        # Run with timeout to prevent hanging
+        timeout 45m python scraper.py
+        
+      timeout-minutes: 50
+      
+    - name: 📊 Upload Execution Logs
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: scraper-logs-${{ github.run_number }}
+        path: |
+          *.log
+          logs/
+        retention-days: 7
+        
+    - name: 💬 Notify on Failure
+      if: failure()
+      run: |
+        echo "❌ Scraper execution failed!"
+        echo "📝 Check the logs in the Actions tab for details."
+        echo "🔧 Common issues:"
+        echo "   1. Invalid DamaDam credentials"
+        echo "   2. Google Sheets permissions"
+        echo "   3. Network connectivity issues"
+        echo "   4. DamaDam site changes"
+
+  # Optional: Health check job
+  health-check:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    
+    steps:
+    - name: 🏥 Health Check
+      run: |
+        echo "🏥 Running health check..."
+        echo "📅 Scheduled run at: $(date)"
+        echo "🔄 Next run in ~6 hours"
+        
+        # You can add additional health checks here
+        # e.g., ping external services, check API quotas, etc.
+        
+        echo "✅ Health check completed"
+
+# Workflow configuration
+env:
+  # Global environment variables
+  PYTHONUNBUFFERED: 1
+  PYTHONIOENCODING: utf-8
