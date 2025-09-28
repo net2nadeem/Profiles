@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-DamaDam Profile Scraper - OPTIMIZED VERSION
-GitHub Actions ready with Tags integration and smart updates
+DamaDam Profile Scraper - SIMPLIFIED VERSION
+No duplicate handling, new records at top, cell-level highlighting
 """
 
 import os
@@ -12,7 +12,7 @@ import random
 import re
 from datetime import datetime
 
-print("🚀 Starting DamaDam Scraper (Optimized Version)...")
+print("🚀 Starting DamaDam Scraper (Simplified Version)...")
 
 # Check required packages
 missing_packages = []
@@ -80,11 +80,12 @@ TAGS_CONFIG = {
     'Pending': '⏳ Pending'
 }
 
+# Highlight color for changed cells only
 HIGHLIGHT_COLOR = {
     "red": 1.0,
     "green": 0.9,
     "blue": 0.6
-}  # Light mustard color
+}
 
 # === LOGGING ===
 def log_msg(message, level="INFO"):
@@ -98,7 +99,7 @@ class ScraperStats:
     def __init__(self):
         self.start_time = datetime.now()
         self.total = self.current = self.success = self.errors = 0
-        self.new_profiles = self.updated_profiles = 0
+        self.new_profiles = self.updated_cells = 0
         self.tags_processed = 0
     
     def show_summary(self):
@@ -109,7 +110,7 @@ class ScraperStats:
         print(f"✅ Successfully Scraped: {self.success}")
         print(f"❌ Errors: {self.errors}")
         print(f"🆕 New Profiles: {self.new_profiles}")
-        print(f"🔄 Updated Profiles: {self.updated_profiles}")
+        print(f"🔄 Updated Cells: {self.updated_cells}")
         print(f"🏷️  Tags Processed: {self.tags_processed}{Style.RESET_ALL}")
         print("-" * 50)
 
@@ -236,13 +237,6 @@ def login_to_damadam(driver):
         
         if not form_found:
             log_msg("❌ No login form found with any method", "ERROR")
-            # Debug: Save page source for analysis
-            try:
-                with open("login_page_debug.html", "w", encoding="utf-8") as f:
-                    f.write(driver.page_source)
-                log_msg("🔍 Login page saved as login_page_debug.html for analysis", "INFO")
-            except:
-                pass
             return False
         
         # Wait for login to process
@@ -279,37 +273,11 @@ def login_to_damadam(driver):
             log_msg("✅ Login successful!", "SUCCESS")
             return True
         else:
-            # Check for error messages
-            error_selectors = [".error", ".alert", "[class*='error']", "[class*='alert']"]
-            for selector in error_selectors:
-                try:
-                    error_elements = driver.find_elements(By.CSS_SELECTOR, selector)
-                    for elem in error_elements:
-                        if elem.text.strip():
-                            log_msg(f"🚨 Error message: {elem.text.strip()}", "ERROR")
-                except:
-                    pass
-            
-            log_msg("❌ Login failed - no success indicators found", "ERROR")
-            
-            # Debug: Save post-login page
-            try:
-                with open("post_login_debug.html", "w", encoding="utf-8") as f:
-                    f.write(driver.page_source)
-                log_msg("🔍 Post-login page saved as post_login_debug.html", "INFO")
-            except:
-                pass
-                
+            log_msg("❌ Login failed", "ERROR")
             return False
             
     except Exception as e:
         log_msg(f"❌ Login error: {e}", "ERROR")
-        try:
-            with open("login_error_debug.html", "w", encoding="utf-8") as f:
-                f.write(driver.page_source)
-            log_msg("🔍 Error page saved as login_error_debug.html", "INFO")
-        except:
-            pass
         return False
 
 # === USER FETCHING ===
@@ -548,7 +516,7 @@ def get_tags_for_nickname(nickname, tags_mapping):
     return ", ".join(tags) if tags else ""
 
 def export_to_google_sheets(profiles_batch, tags_mapping):
-    """Enhanced Google Sheets export with smart updates"""
+    """SIMPLIFIED Google Sheets export - no duplicates, top insertion, cell highlighting"""
     if not profiles_batch:
         return False
         
@@ -562,7 +530,7 @@ def export_to_google_sheets(profiles_batch, tags_mapping):
         workbook = client.open_by_url(SHEET_URL)
         worksheet = workbook.sheet1
         
-        # Setup headers (removed SCOUNT)
+        # Setup headers (no SCOUNT column)
         headers = ["DATE","TIME","NICKNAME","TAGS","CITY","GENDER","MARRIED","AGE",
                    "JOINED","FOLLOWERS","POSTS","PLINK","PIMAGE","INTRO"]
         
@@ -582,7 +550,7 @@ def export_to_google_sheets(profiles_batch, tags_mapping):
                     }
         
         new_count = 0
-        updated_count = 0
+        updated_cells_count = 0
         
         for profile in profiles_batch:
             nickname = profile.get("NICKNAME","").strip()
@@ -611,64 +579,56 @@ def export_to_google_sheets(profiles_batch, tags_mapping):
             ]
             
             if nickname in existing_rows:
-                # Update existing profile
+                # Update existing profile - only changed cells
                 existing_info = existing_rows[nickname]
                 row_index = existing_info['row_index']
                 existing_data = existing_info['data']
                 
-                # Check if update is needed (compare key fields)
-                needs_update = False
-                key_fields = [4, 5, 6, 7, 8, 9, 10, 13]  # CITY, GENDER, MARRIED, AGE, JOINED, FOLLOWERS, POSTS, INTRO
+                # Column mapping for letters
+                col_letters = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N']
                 
-                for field_idx in key_fields:
-                    existing_value = existing_data[field_idx] if field_idx < len(existing_data) else ""
-                    new_value = row[field_idx] if field_idx < len(row) else ""
-                    if existing_value != new_value and new_value:  # Only update if new value exists
-                        needs_update = True
-                        break
-                
-                # Always update DATE, TIME, and TAGS
-                if not needs_update:
-                    # Check if tags changed
-                    existing_tags = existing_data[3] if len(existing_data) > 3 else ""
-                    if existing_tags != row[3]:
-                        needs_update = True
-                
-                if needs_update:
-                    try:
-                        # Clear background formatting first
-                        worksheet.format(f'A{row_index}:N{row_index}', {
-                            "backgroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0}
-                        })
+                # Check each field and update only if different
+                updated_any = False
+                for col_idx, new_value in enumerate(row):
+                    existing_value = existing_data[col_idx] if col_idx < len(existing_data) else ""
+                    
+                    # Always update DATE and TIME
+                    if col_idx in [0, 1]:  # DATE, TIME columns
+                        if existing_value != new_value:
+                            cell_range = f"{col_letters[col_idx]}{row_index}"
+                            worksheet.update(cell_range, new_value)
+                            updated_any = True
+                    
+                    # Update other fields only if new value exists and is different
+                    elif new_value and existing_value != new_value:
+                        cell_range = f"{col_letters[col_idx]}{row_index}"
+                        worksheet.update(cell_range, new_value)
                         
-                        # Update the row
-                        range_name = f'A{row_index}:N{row_index}'
-                        worksheet.update(range_name, [row])
-                        
-                        # Highlight updated row with light mustard
-                        worksheet.format(f'A{row_index}:N{row_index}', {
+                        # Highlight only the changed cell
+                        worksheet.format(cell_range, {
                             "backgroundColor": HIGHLIGHT_COLOR
                         })
                         
-                        updated_count += 1
-                        stats.updated_profiles += 1
-                        log_msg(f"🔄 Updated {nickname} (highlighted)", "INFO")
-                        
-                    except Exception as e:
-                        log_msg(f"❌ Failed to update {nickname}: {e}", "ERROR")
-                else:
+                        updated_cells_count += 1
+                        stats.updated_cells += 1
+                        updated_any = True
+                        log_msg(f"🔄 Updated {nickname} - {headers[col_idx]}: {new_value}", "INFO")
+                
+                if not updated_any:
                     log_msg(f"➡️ {nickname} - No changes needed", "INFO")
+                    
             else:
-                # Add new profile
+                # Add new profile AT THE TOP (row 2, after headers)
                 try:
-                    worksheet.append_row(row)
+                    # Insert new row at position 2 (after header)
+                    worksheet.insert_row(row, 2)
                     new_count += 1
                     stats.new_profiles += 1
-                    log_msg(f"✅ Added new profile: {nickname}", "SUCCESS")
+                    log_msg(f"✅ Added new profile at top: {nickname}", "SUCCESS")
                 except Exception as e:
                     log_msg(f"❌ Failed to add {nickname}: {e}", "ERROR")
         
-        log_msg(f"📊 Export complete: {new_count} new, {updated_count} updated", "SUCCESS")
+        log_msg(f"📊 Export complete: {new_count} new, {updated_cells_count} cells updated", "SUCCESS")
         return True
         
     except Exception as e:
@@ -677,8 +637,8 @@ def export_to_google_sheets(profiles_batch, tags_mapping):
 
 # === MAIN EXECUTION ===
 def main():
-    """Enhanced main execution with better error handling"""
-    log_msg("🚀 Starting DamaDam Profile Scraper (Optimized)", "INFO")
+    """Simplified main execution"""
+    log_msg("🚀 Starting DamaDam Profile Scraper (Simplified)", "INFO")
     
     # Setup browser
     driver = setup_github_browser()
