@@ -60,7 +60,7 @@ ONLINE_USERS_URL = "https://damadam.pk/online_kon/"
 USERNAME = os.getenv('DAMADAM_USERNAME')
 PASSWORD = os.getenv('DAMADAM_PASSWORD')
 SHEET_URL = os.getenv('GOOGLE_SHEET_URL')
-SCRAPE_MODE = os.getenv('SCRAPE_MODE', 'ONLINE')  # 'TARGET' or 'ONLINE'
+SCRAPE_MODE = os.getenv('SCRAPE_MODE', 'TARGET')  # 'TARGET' or 'ONLINE'
 
 if not all([USERNAME, PASSWORD, SHEET_URL]):
     print("❌ Missing required environment variables!")
@@ -476,10 +476,6 @@ def clean_text(text):
         return ""
     text = str(text).strip().replace('\xa0', ' ').replace('\n', ' ')
     return re.sub(r'\s+', ' ', text).strip()
-# extra cleaning (example: unwanted words hatao)
-    text = text.replace("DamaDam", "")   # word delete
-    text = text.replace("Profile", "User")  # word replace
-    return text
 
 # === GOOGLE SHEETS ===
 def get_google_sheets_client():
