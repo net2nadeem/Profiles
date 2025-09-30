@@ -283,12 +283,20 @@ def get_online_users(driver):
     try:
         log_msg("👥 Fetching online users...", "INFO")
         driver.get(ONLINE_USERS_URL)
+        
+        # Wait for user list to load - using multiple wait strategies
         time.sleep(3)
         
-        # Wait for user list to load
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/users/']"))
-        )
+        try:
+            # Try waiting for the user links
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a[href*='/users/']"))
+            )
+        except TimeoutException:
+            # If timeout, try alternative selector
+            WebDriverWait(driver, 5).until(
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "li bdi"))
+            )
         
         # Find all user profile links
         user_links = driver.find_elements(By.CSS_SELECTOR, "a[href*='/users/']")
