@@ -60,7 +60,6 @@ ONLINE_USERS_URL = "https://damadam.pk/online_kon/"
 USERNAME = os.getenv('DAMADAM_USERNAME')
 PASSWORD = os.getenv('DAMADAM_PASSWORD')
 SHEET_URL = os.getenv('GOOGLE_SHEET_URL')
-SCRAPE_MODE = os.getenv('SCRAPE_MODE', 'TARGET')  # 'TARGET' or 'ONLINE'
 
 if not all([USERNAME, PASSWORD, SHEET_URL]):
     print("❌ Missing required environment variables!")
@@ -237,58 +236,126 @@ def setup_github_browser():
 
 # === AUTHENTICATION ===
 def login_to_damadam(driver):
-    """Login to DamaDam"""
+    """Enhanced login with comprehensive debugging"""
     try:
-        log_msg("🔐 Logging in...", "INFO")
+        log_msg("🔐 Logging in to DamaDam...")
         driver.get(LOGIN_URL)
         time.sleep(3)
         
+        current_url = driver.current_url
+        page_title = driver.title
+        log_msg(f"🔍 Current URL: {current_url}", "INFO")
+        log_msg(f"📄 Page title: {page_title}", "INFO")
+        
+        # Try multiple selectors for login form
         login_selectors = [
             {"nick": "#nick", "pass": "#pass", "button": "form button"},
-            {"nick": "input[name='nick']", "pass": "input[name='pass']", "button": "button[type='submit']"}
+            {"nick": "input[name='nick']", "pass": "input[name='pass']", "button": "button[type='submit']"},
+            {"nick": "input[placeholder*='nick']", "pass": "input[type='password']", "button": ".btn"},
+            {"nick": "[name='username']", "pass": "[name='password']", "button": "input[type='submit']"},
         ]
         
-        for i, sel in enumerate(login_selectors):
+        form_found = False
+        for i, selectors in enumerate(login_selectors):
             try:
-                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, sel["nick"])))
-                nick_field = driver.find_element(By.CSS_SELECTOR, sel["nick"])
-                pass_field = driver.find_element(By.CSS_SELECTOR, sel["pass"])
-                submit_btn = driver.find_element(By.CSS_SELECTOR, sel["button"])
+                log_msg(f"🔍 Trying login method {i+1}...", "INFO")
+                
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, selectors["nick"]))
+                )
+                
+                nick_field = driver.find_element(By.CSS_SELECTOR, selectors["nick"])
+                pass_field = driver.find_element(By.CSS_SELECTOR, selectors["pass"])
+                submit_btn = driver.find_element(By.CSS_SELECTOR, selectors["button"])
+                
+                log_msg(f"✅ Found login form with method {i+1}", "SUCCESS")
                 
                 nick_field.clear()
                 time.sleep(0.5)
                 nick_field.send_keys(USERNAME)
+                
                 pass_field.clear()
                 time.sleep(0.5)
                 pass_field.send_keys(PASSWORD)
+                
+                nick_value = nick_field.get_attribute('value')
+                pass_length = len(pass_field.get_attribute('value'))
+                log_msg(f"🔍 Username filled: {nick_value[:3]}***", "INFO")
+                log_msg(f"🔍 Password filled: {pass_length} characters", "INFO")
+                
+                log_msg("🚀 Submitting login form...", "INFO")
                 submit_btn.click()
+                form_found = True
                 break
-            except:
+                
+            except Exception as e:
+                log_msg(f"⚠️ Login method {i+1} failed: {e}", "WARNING")
                 continue
         
+        if not form_found:
+            log_msg("❌ No login form found with any method", "ERROR")
+            return False
+        
+        log_msg("⏳ Waiting for login to process...", "INFO")
         time.sleep(LOGIN_DELAY)
         
-        if "login" not in driver.current_url.lower():
+        current_url_after = driver.current_url
+        log_msg(f"🔍 URL after login: {current_url_after}", "INFO")
+        
+        # Check login success
+        success_indicators = [
+            lambda: "login" not in driver.current_url.lower(),
+            lambda: "dashboard" in driver.current_url.lower() or "profile" in driver.current_url.lower(),
+            lambda: any(driver.find_elements(By.CSS_SELECTOR, selector) for selector in [
+                "[href*='logout']", "[href*='profile']", ".user-menu", ".logout"
+            ]),
+            lambda: not any(driver.find_elements(By.CSS_SELECTOR, selector) for selector in [
+                "#nick", "input[name='nick']", ".login-form"
+            ])
+        ]
+        
+        login_success = False
+        for i, check in enumerate(success_indicators):
+            try:
+                if check():
+                    log_msg(f"✅ Login success indicator {i+1} passed", "SUCCESS")
+                    login_success = True
+                    break
+            except Exception as e:
+                log_msg(f"⚠️ Success check {i+1} failed: {e}", "WARNING")
+        
+        if login_success:
             log_msg("✅ Login successful!", "SUCCESS")
             return True
         else:
             log_msg("❌ Login failed", "ERROR")
             return False
+            
     except Exception as e:
         log_msg(f"❌ Login error: {e}", "ERROR")
         return False
 
-# === TARGET USERS ===
+# === TARGET USERS MANAGEMENT ===
 def get_target_users(client, sheet_url):
     """Get target users from Target sheet"""
     try:
-        log_msg("🎯 Loading target users...", "INFO")
+        log_msg("🎯 Loading target users from Target sheet...")
         workbook = client.open_by_url(sheet_url)
-        target_sheet = workbook.worksheet("Target")
-        target_data = target_sheet.get_all_values()
         
+        try:
+            target_sheet = workbook.worksheet("Target")
+        except:
+            log_msg("❌ Target sheet not found! Please create 'Target' sheet", "ERROR")
+            return []
+        
+        target_data = target_sheet.get_all_values()
         if not target_data or len(target_data) < 2:
-            log_msg("⚠️ Target sheet empty", "WARNING")
+            log_msg("⚠️ Target sheet is empty or has no data rows", "WARNING")
+            return []
+        
+        headers = target_data[0]
+        if len(headers) < 2 or 'USERNAME' not in headers[0].upper() or 'STATUS' not in headers[1].upper():
+            log_msg("❌ Target sheet headers incorrect. Expected: USERNAME | STATUS | LAST_SCRAPED | NOTES", "ERROR")
             return []
         
         pending_users = []
@@ -296,14 +363,21 @@ def get_target_users(client, sheet_url):
             if len(row) >= 2:
                 username = row[0].strip()
                 status = row[1].strip().upper()
+                
                 if username and status == 'PENDING':
-                    pending_users.append({'username': username, 'row_index': i})
+                    pending_users.append({
+                        'username': username,
+                        'row_index': i,
+                        'status': status
+                    })
         
-        log_msg(f"✅ Found {len(pending_users)} pending users", "SUCCESS")
+        log_msg(f"✅ Found {len(pending_users)} pending users to scrape", "SUCCESS")
         return pending_users
+        
     except Exception as e:
-        log_msg(f"❌ Failed to load targets: {e}", "ERROR")
+        log_msg(f"❌ Failed to load target users: {e}", "ERROR")
         return []
+
 
 # === POST SCRAPING ===
 def scrape_recent_post(driver, nickname):
