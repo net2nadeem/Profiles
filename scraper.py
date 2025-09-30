@@ -279,44 +279,70 @@ def login_to_damadam(driver):
 
 # === ONLINE USERS ===
 def get_online_users(driver):
-    """Get list of online users from online_kon page"""
+    """Get list of online users - using correct HTML structure"""
     try:
         log_msg("👥 Fetching online users...", "INFO")
         driver.get(ONLINE_USERS_URL)
         
-        # Wait for user list to load - using multiple wait strategies
-        time.sleep(3)
+        # Wait for page to load
+        time.sleep(5)
+        
+        log_msg(f"Current URL: {driver.current_url}", "INFO")
+        
+        # The correct selector based on the HTML structure
+        # Usernames are in: <b class="clb"><bdi>USERNAME</bdi></b>
+        online_users = []
         
         try:
-            # Try waiting for the user links
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a[href*='/users/']"))
-            )
-        except TimeoutException:
-            # If timeout, try alternative selector
-            WebDriverWait(driver, 5).until(
-                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "li bdi"))
-            )
+            # Find all bdi elements that contain usernames
+            bdi_elements = driver.find_elements(By.CSS_SELECTOR, "b.clb bdi")
+            log_msg(f"Found {len(bdi_elements)} username elements", "INFO")
+            
+            for elem in bdi_elements:
+                try:
+                    username = elem.text.strip()
+                    if username and username not in online_users:
+                        online_users.append(username)
+                        log_msg(f"Found user: {username}", "INFO")
+                except Exception as e:
+                    log_msg(f"Error extracting username: {e}", "WARNING")
+                    continue
+            
+            if online_users:
+                log_msg(f"✅ Found {len(online_users)} online users", "SUCCESS")
+                return online_users
+            else:
+                log_msg("⚠️ No users found with b.clb bdi selector", "WARNING")
+                
+        except Exception as e:
+            log_msg(f"❌ Failed to extract usernames: {e}", "ERROR")
         
-        # Find all user profile links
-        user_links = driver.find_elements(By.CSS_SELECTOR, "a[href*='/users/']")
+        # Fallback: Try just bdi elements
+        try:
+            log_msg("Trying fallback: all bdi elements...", "INFO")
+            bdi_elements = driver.find_elements(By.TAG_NAME, "bdi")
+            log_msg(f"Found {len(bdi_elements)} bdi elements", "INFO")
+            
+            for elem in bdi_elements:
+                try:
+                    username = elem.text.strip()
+                    # Filter out navigation text like "next", "prev"
+                    if username and username not in ['next', 'prev', 'top', 'bottom'] and username not in online_users:
+                        online_users.append(username)
+                except:
+                    continue
+            
+            if online_users:
+                log_msg(f"✅ Fallback success: Found {len(online_users)} users", "SUCCESS")
+                return online_users
+        except Exception as e:
+            log_msg(f"Fallback failed: {e}", "WARNING")
         
-        online_users = []
-        for link in user_links:
-            try:
-                href = link.get_attribute('href')
-                if href and '/users/' in href:
-                    # Extract nickname from URL: https://damadam.pk/users/nickname/
-                    match = re.search(r'/users/([^/]+)/?', href)
-                    if match:
-                        nickname = match.group(1).strip()
-                        if nickname and nickname not in online_users:
-                            online_users.append(nickname)
-            except:
-                continue
+        if not online_users:
+            log_msg("❌ No users found with any method", "ERROR")
         
-        log_msg(f"✅ Found {len(online_users)} online users", "SUCCESS")
         return online_users
+        
     except Exception as e:
         log_msg(f"❌ Failed to fetch online users: {e}", "ERROR")
         return []
