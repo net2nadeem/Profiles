@@ -284,7 +284,7 @@ def login_to_damadam(driver):
 def get_online_users(driver):
     """Get online users with better error handling"""
     try:
-        log_msg("👥 Fetching online users...")
+        log_msg("👥 Fetching Online Users.✨.")
         driver.get(ONLINE_USERS_URL)
         
         # Wait for user list
@@ -322,8 +322,7 @@ def scrape_profile(driver, nickname):
         
         now = datetime.now()
         data = {
-            'DATE': now.strftime("%d-%b-%Y"),
-            'TIME': now.strftime("%I:%M %p"),
+            'DATETIME': now.strftime("%d-%b-%y %I:%M %p"),
             'NICKNAME': nickname,
             'TAGS': '',  # Will be populated later
             'CITY': '',
@@ -531,7 +530,7 @@ def export_to_google_sheets(profiles_batch, tags_mapping):
         worksheet = workbook.sheet1
         
         # Setup headers (no SCOUNT column)
-        headers = ["DATE","TIME","NICKNAME","TAGS","CITY","GENDER","MARRIED","AGE",
+        headers = ["DATETIME","NICKNAME","TAGS","CITY","GENDER","MARRIED","AGE",
                    "JOINED","FOLLOWERS","POSTS","PLINK","PIMAGE","INTRO"]
         
         existing_data = worksheet.get_all_values()
@@ -562,8 +561,7 @@ def export_to_google_sheets(profiles_batch, tags_mapping):
             
             # Prepare row data
             row = [
-                profile.get("DATE",""),
-                profile.get("TIME",""),
+                profile.get("DATETIME",""),
                 nickname,
                 profile.get("TAGS",""),
                 profile.get("CITY",""),
