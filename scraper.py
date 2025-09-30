@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-DamaDam Profile Scraper - ENHANCED VERSION with Recent Post Data
-GitHub Actions ready with Tags integration and smart updates
+DamaDam Online Users Scraper - Simplified Version
+Scrapes online users only and exports to 'Online' sheet
 """
 
 import os
@@ -12,7 +12,7 @@ import random
 import re
 from datetime import datetime, timedelta
 
-print("🚀 Starting DamaDam Scraper (Enhanced with Post Data)...")
+print("🚀 Starting DamaDam Online Users Scraper...")
 
 # Check required packages
 missing_packages = []
@@ -117,7 +117,7 @@ class ScraperStats:
         elapsed = str(datetime.now() - self.start_time).split('.')[0]
         print(f"\n{Fore.MAGENTA}📊 FINAL SUMMARY:")
         print(f"⏱️  Total Time: {elapsed}")
-        print(f"🎯 Target Users: {self.total}")
+        print(f"👥 Online Users Found: {self.total}")
         print(f"✅ Successfully Scraped: {self.success}")
         print(f"❌ Errors: {self.errors}")
         print(f"🆕 New Profiles: {self.new_profiles}")
@@ -236,148 +236,82 @@ def setup_github_browser():
 
 # === AUTHENTICATION ===
 def login_to_damadam(driver):
-    """Enhanced login with comprehensive debugging"""
+    """Login to DamaDam"""
     try:
-        log_msg("🔐 Logging in to DamaDam...")
+        log_msg("🔐 Logging in...", "INFO")
         driver.get(LOGIN_URL)
         time.sleep(3)
         
-        current_url = driver.current_url
-        page_title = driver.title
-        log_msg(f"🔍 Current URL: {current_url}", "INFO")
-        log_msg(f"📄 Page title: {page_title}", "INFO")
-        
-        # Try multiple selectors for login form
         login_selectors = [
             {"nick": "#nick", "pass": "#pass", "button": "form button"},
-            {"nick": "input[name='nick']", "pass": "input[name='pass']", "button": "button[type='submit']"},
-            {"nick": "input[placeholder*='nick']", "pass": "input[type='password']", "button": ".btn"},
-            {"nick": "[name='username']", "pass": "[name='password']", "button": "input[type='submit']"},
+            {"nick": "input[name='nick']", "pass": "input[name='pass']", "button": "button[type='submit']"}
         ]
         
-        form_found = False
-        for i, selectors in enumerate(login_selectors):
+        for i, sel in enumerate(login_selectors):
             try:
-                log_msg(f"🔍 Trying login method {i+1}...", "INFO")
-                
-                WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, selectors["nick"]))
-                )
-                
-                nick_field = driver.find_element(By.CSS_SELECTOR, selectors["nick"])
-                pass_field = driver.find_element(By.CSS_SELECTOR, selectors["pass"])
-                submit_btn = driver.find_element(By.CSS_SELECTOR, selectors["button"])
-                
-                log_msg(f"✅ Found login form with method {i+1}", "SUCCESS")
+                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, sel["nick"])))
+                nick_field = driver.find_element(By.CSS_SELECTOR, sel["nick"])
+                pass_field = driver.find_element(By.CSS_SELECTOR, sel["pass"])
+                submit_btn = driver.find_element(By.CSS_SELECTOR, sel["button"])
                 
                 nick_field.clear()
                 time.sleep(0.5)
                 nick_field.send_keys(USERNAME)
-                
                 pass_field.clear()
                 time.sleep(0.5)
                 pass_field.send_keys(PASSWORD)
-                
-                nick_value = nick_field.get_attribute('value')
-                pass_length = len(pass_field.get_attribute('value'))
-                log_msg(f"🔍 Username filled: {nick_value[:3]}***", "INFO")
-                log_msg(f"🔍 Password filled: {pass_length} characters", "INFO")
-                
-                log_msg("🚀 Submitting login form...", "INFO")
                 submit_btn.click()
-                form_found = True
                 break
-                
-            except Exception as e:
-                log_msg(f"⚠️ Login method {i+1} failed: {e}", "WARNING")
+            except:
                 continue
         
-        if not form_found:
-            log_msg("❌ No login form found with any method", "ERROR")
-            return False
-        
-        log_msg("⏳ Waiting for login to process...", "INFO")
         time.sleep(LOGIN_DELAY)
         
-        current_url_after = driver.current_url
-        log_msg(f"🔍 URL after login: {current_url_after}", "INFO")
-        
-        # Check login success
-        success_indicators = [
-            lambda: "login" not in driver.current_url.lower(),
-            lambda: "dashboard" in driver.current_url.lower() or "profile" in driver.current_url.lower(),
-            lambda: any(driver.find_elements(By.CSS_SELECTOR, selector) for selector in [
-                "[href*='logout']", "[href*='profile']", ".user-menu", ".logout"
-            ]),
-            lambda: not any(driver.find_elements(By.CSS_SELECTOR, selector) for selector in [
-                "#nick", "input[name='nick']", ".login-form"
-            ])
-        ]
-        
-        login_success = False
-        for i, check in enumerate(success_indicators):
-            try:
-                if check():
-                    log_msg(f"✅ Login success indicator {i+1} passed", "SUCCESS")
-                    login_success = True
-                    break
-            except Exception as e:
-                log_msg(f"⚠️ Success check {i+1} failed: {e}", "WARNING")
-        
-        if login_success:
+        if "login" not in driver.current_url.lower():
             log_msg("✅ Login successful!", "SUCCESS")
             return True
         else:
             log_msg("❌ Login failed", "ERROR")
             return False
-            
     except Exception as e:
         log_msg(f"❌ Login error: {e}", "ERROR")
         return False
 
-# === TARGET USERS MANAGEMENT ===
-def get_target_users(client, sheet_url):
-    """Get target users from Target sheet"""
+# === ONLINE USERS ===
+def get_online_users(driver):
+    """Get list of online users from online_kon page"""
     try:
-        log_msg("🎯 Loading target users from Target sheet...")
-        workbook = client.open_by_url(sheet_url)
+        log_msg("👥 Fetching online users...", "INFO")
+        driver.get(ONLINE_USERS_URL)
+        time.sleep(3)
         
-        try:
-            target_sheet = workbook.worksheet("Target")
-        except:
-            log_msg("❌ Target sheet not found! Please create 'Target' sheet", "ERROR")
-            return []
+        # Wait for user list to load
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/users/']"))
+        )
         
-        target_data = target_sheet.get_all_values()
-        if not target_data or len(target_data) < 2:
-            log_msg("⚠️ Target sheet is empty or has no data rows", "WARNING")
-            return []
+        # Find all user profile links
+        user_links = driver.find_elements(By.CSS_SELECTOR, "a[href*='/users/']")
         
-        headers = target_data[0]
-        if len(headers) < 2 or 'USERNAME' not in headers[0].upper() or 'STATUS' not in headers[1].upper():
-            log_msg("❌ Target sheet headers incorrect. Expected: USERNAME | STATUS | LAST_SCRAPED | NOTES", "ERROR")
-            return []
+        online_users = []
+        for link in user_links:
+            try:
+                href = link.get_attribute('href')
+                if href and '/users/' in href:
+                    # Extract nickname from URL: https://damadam.pk/users/nickname/
+                    match = re.search(r'/users/([^/]+)/?', href)
+                    if match:
+                        nickname = match.group(1).strip()
+                        if nickname and nickname not in online_users:
+                            online_users.append(nickname)
+            except:
+                continue
         
-        pending_users = []
-        for i, row in enumerate(target_data[1:], 2):
-            if len(row) >= 2:
-                username = row[0].strip()
-                status = row[1].strip().upper()
-                
-                if username and status == 'PENDING':
-                    pending_users.append({
-                        'username': username,
-                        'row_index': i,
-                        'status': status
-                    })
-        
-        log_msg(f"✅ Found {len(pending_users)} pending users to scrape", "SUCCESS")
-        return pending_users
-        
+        log_msg(f"✅ Found {len(online_users)} online users", "SUCCESS")
+        return online_users
     except Exception as e:
-        log_msg(f"❌ Failed to load target users: {e}", "ERROR")
+        log_msg(f"❌ Failed to fetch online users: {e}", "ERROR")
         return []
-
 
 # === POST SCRAPING ===
 def scrape_recent_post(driver, nickname):
@@ -599,50 +533,27 @@ def get_tags_for_nickname(nickname, tags_mapping):
         return ""
     return ", ".join(tags_mapping[nickname])
 
-def export_to_google_sheets_with_rate_limiting(profiles_batch, tags_mapping, target_updates=None):
-    """Export with rate limiting"""
-    if not profiles_batch and not target_updates:
+def export_to_online_sheet(profiles_batch, tags_mapping):
+    """Export to 'Online' sheet with rate limiting"""
+    if not profiles_batch:
         return False
     
     try:
-        log_msg("📊 Exporting to Google Sheets...", "INFO")
+        log_msg("📊 Exporting to Online sheet...", "INFO")
         client = get_google_sheets_client()
         if not client:
             return False
         
         workbook = client.open_by_url(SHEET_URL)
         
-        # Update target statuses
-        if target_updates:
-            try:
-                target_sheet = workbook.worksheet("Target")
-                for update in target_updates:
-                    try:
-                        track_api_request()
-                        row_idx = update['row_index']
-                        status = update['status']
-                        notes = update.get('notes', '')
-                        
-                        update_range = f'B{row_idx}:D{row_idx}'
-                        update_values = [status]
-                        update_values.append(datetime.now().strftime("%Y-%m-%d %H:%M") if status.upper() == 'COMPLETED' else '')
-                        update_values.append(notes)
-                        
-                        target_sheet.update(update_range, [update_values])
-                        time.sleep(GOOGLE_API_RATE_LIMIT['request_delay'])
-                    except Exception as e:
-                        if "429" in str(e):
-                            time.sleep(65)
-                            target_sheet.update(update_range, [update_values])
-                log_msg(f"✅ Updated {len(target_updates)} target statuses", "SUCCESS")
-            except Exception as e:
-                log_msg(f"⚠️ Target update failed: {e}", "WARNING")
+        # Get or create 'Online' sheet
+        try:
+            worksheet = workbook.worksheet("Online")
+            log_msg("✅ Found Online sheet", "SUCCESS")
+        except:
+            log_msg("📄 Creating Online sheet...", "INFO")
+            worksheet = workbook.add_worksheet(title="Online", rows="1000", cols="15")
         
-        if not profiles_batch:
-            return True
-        
-        # Main worksheet
-        worksheet = workbook.sheet1
         headers = ["DATETIME","NICKNAME","TAGS","CITY","GENDER","MARRIED","AGE","JOINED","FOLLOWERS","POSTS","LPOST","LDATE-TIME","PLINK","PIMAGE","INTRO"]
         
         track_api_request()
@@ -745,7 +656,7 @@ def export_to_google_sheets_with_rate_limiting(profiles_batch, tags_mapping, tar
 # === MAIN ===
 def main():
     """Main execution"""
-    log_msg("🚀 Starting Enhanced Scraper", "INFO")
+    log_msg("🚀 Starting Online Users Scraper", "INFO")
     
     driver = setup_github_browser()
     if not driver:
@@ -760,23 +671,20 @@ def main():
             return
         
         tags_mapping = get_tags_mapping(client, SHEET_URL)
-        target_users = get_target_users(client, SHEET_URL)
+        online_users = get_online_users(driver)
         
-        if not target_users:
-            log_msg("❌ No target users found", "ERROR")
+        if not online_users:
+            log_msg("❌ No online users found", "ERROR")
             return
         
-        stats.total = len(target_users)
+        stats.total = len(online_users)
         scraped_profiles = []
-        target_updates = []
         batch_size = GOOGLE_API_RATE_LIMIT['batch_size']
         
-        log_msg(f"🎯 Processing {stats.total} users...", "INFO")
+        log_msg(f"👥 Processing {stats.total} online users...", "INFO")
         
-        for i, target_user in enumerate(target_users, 1):
+        for i, nickname in enumerate(online_users, 1):
             stats.current = i
-            nickname = target_user['username']
-            row_index = target_user['row_index']
             
             log_msg(f"🔍 Scraping: {nickname} ({i}/{stats.total})", "INFO")
             
@@ -786,40 +694,24 @@ def main():
                 if profile:
                     scraped_profiles.append(profile)
                     stats.success += 1
-                    target_updates.append({
-                        'row_index': row_index,
-                        'status': 'Completed',
-                        'notes': 'Successfully scraped'
-                    })
                 else:
                     stats.errors += 1
-                    target_updates.append({
-                        'row_index': row_index,
-                        'status': 'Pending',
-                        'notes': 'Failed - will retry'
-                    })
                 
-                if len(scraped_profiles) >= batch_size or len(target_updates) >= batch_size:
+                if len(scraped_profiles) >= batch_size:
                     log_msg(f"📤 Exporting batch of {len(scraped_profiles)} profiles...", "INFO")
-                    if export_to_google_sheets_with_rate_limiting(scraped_profiles, tags_mapping, target_updates):
+                    if export_to_online_sheet(scraped_profiles, tags_mapping):
                         scraped_profiles = []
-                        target_updates = []
                         time.sleep(10)
                     else:
                         log_msg("⚠️ Export failed, keeping data for retry", "WARNING")
             except Exception as e:
                 stats.errors += 1
                 log_msg(f"❌ Error: {e}", "ERROR")
-                target_updates.append({
-                    'row_index': row_index,
-                    'status': 'Pending',
-                    'notes': f'Error: {str(e)[:100]}'
-                })
             
             time.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
         
-        if scraped_profiles or target_updates:
-            export_to_google_sheets_with_rate_limiting(scraped_profiles, tags_mapping, target_updates)
+        if scraped_profiles:
+            export_to_online_sheet(scraped_profiles, tags_mapping)
         
         stats.show_summary()
         log_msg(f"🎯 Completed: {stats.success}/{stats.total}", "INFO")
