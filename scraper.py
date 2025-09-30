@@ -98,6 +98,9 @@ TAGS_CONFIG = {
     'Pending': '⏳ Pending'
 }
 
+# Placeholder texts to replace with blank
+PLACEHOLDER_TEXTS = ['not set', 'no city', 'no set', 'none', 'n/a', 'null']
+
 # === LOGGING ===
 def log_msg(message, level="INFO"):
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -568,7 +571,7 @@ def get_tags_for_nickname(nickname, tags_mapping):
     return ", ".join(tags_mapping[nickname])
 
 def export_to_online_sheet(profiles_batch, tags_mapping):
-    """Export to 'Online' sheet with rate limiting"""
+    """Export to 'Online' sheet - NEW DATA AT TOP"""
     if not profiles_batch:
         return False
     
@@ -605,6 +608,7 @@ def export_to_online_sheet(profiles_batch, tags_mapping):
                     existing_rows[row[1].strip()] = {'row_index': i, 'data': row}
         
         new_count = updated_count = 0
+        new_profiles_to_insert = []  # Collect new profiles to insert at top
         
         for profile in profiles_batch:
             try:
@@ -666,20 +670,28 @@ def export_to_online_sheet(profiles_batch, tags_mapping):
                     else:
                         log_msg(f"➡️ {nickname} - No changes", "INFO")
                 else:
-                    try:
-                        track_api_request()
-                        worksheet.append_row(row)
-                        new_count += 1
-                        stats.new_profiles += 1
-                        log_msg(f"✅ Added {nickname}", "SUCCESS")
-                        time.sleep(GOOGLE_API_RATE_LIMIT['request_delay'])
-                    except Exception as e:
-                        if "429" in str(e):
-                            time.sleep(65)
-                            worksheet.append_row(row)
-                            new_count += 1
+                    # Collect new profiles to insert at top later
+                    new_profiles_to_insert.append(row)
+                    
             except Exception as e:
                 log_msg(f"❌ Error processing {nickname}: {e}", "ERROR")
+        
+        # Insert all new profiles at the top (row 2) in reverse order
+        if new_profiles_to_insert:
+            log_msg(f"📤 Inserting {len(new_profiles_to_insert)} new profiles at top...", "INFO")
+            for row in new_profiles_to_insert:
+                try:
+                    track_api_request()
+                    worksheet.insert_row(row, 2)  # Always insert at row 2 (after header)
+                    new_count += 1
+                    stats.new_profiles += 1
+                    log_msg(f"✅ Added {row[1]} at top", "SUCCESS")
+                    time.sleep(GOOGLE_API_RATE_LIMIT['request_delay'])
+                except Exception as e:
+                    if "429" in str(e):
+                        time.sleep(65)
+                        worksheet.insert_row(row, 2)
+                        new_count += 1
         
         log_msg(f"📊 Export complete: {new_count} new, {updated_count} updated", "SUCCESS")
         return True
