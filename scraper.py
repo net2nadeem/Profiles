@@ -476,6 +476,10 @@ def clean_text(text):
         return ""
     text = str(text).strip().replace('\xa0', ' ').replace('\n', ' ')
     return re.sub(r'\s+', ' ', text).strip()
+# extra cleaning (example: unwanted words hatao)
+    text = text.replace("DamaDam", "")   # word delete
+    text = text.replace("Profile", "User")  # word replace
+    return text
 
 # === GOOGLE SHEETS ===
 def get_google_sheets_client():
