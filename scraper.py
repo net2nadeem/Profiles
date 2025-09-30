@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-DamaDam Profile Scraper - SIMPLIFIED VERSION
-No duplicate handling, new records at top, cell-level highlighting
+DamaDam Profile Scraper - ENHANCED VERSION with Recent Post Data
+GitHub Actions ready with Tags integration and smart updates
 """
 
 import os
@@ -10,9 +10,9 @@ import time
 import json
 import random
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
-print("🚀 Starting DamaDam Scraper (Simplified Version)...")
+print("🚀 Starting DamaDam Scraper (Enhanced with Post Data)...")
 
 # Check required packages
 missing_packages = []
@@ -60,31 +60,43 @@ ONLINE_USERS_URL = "https://damadam.pk/online_kon/"
 USERNAME = os.getenv('DAMADAM_USERNAME')
 PASSWORD = os.getenv('DAMADAM_PASSWORD')
 SHEET_URL = os.getenv('GOOGLE_SHEET_URL')
+SCRAPE_MODE = os.getenv('SCRAPE_MODE', 'ONLINE')  # 'TARGET' or 'ONLINE'
 
 if not all([USERNAME, PASSWORD, SHEET_URL]):
     print("❌ Missing required environment variables!")
     print("Required: DAMADAM_USERNAME, DAMADAM_PASSWORD, GOOGLE_SHEET_URL")
     sys.exit(1)
 
-# Optimized delays
+# Rate limiting configuration
+GOOGLE_API_RATE_LIMIT = {
+    'max_requests_per_minute': 50,
+    'batch_size': 3,
+    'retry_delay': 65,
+    'request_delay': 1.2
+}
+
+api_requests = []
+
+def track_api_request():
+    """Track API requests for rate limiting"""
+    now = datetime.now()
+    global api_requests
+    api_requests = [req_time for req_time in api_requests if (now - req_time).seconds < 60]
+    api_requests.append(now)
+    if len(api_requests) >= GOOGLE_API_RATE_LIMIT['max_requests_per_minute']:
+        log_msg("⏸️ Rate limit approaching, pausing for 65 seconds...", "WARNING")
+        time.sleep(GOOGLE_API_RATE_LIMIT['retry_delay'])
+        api_requests = []
+
 MIN_DELAY = 1.0
 MAX_DELAY = 2.0
 LOGIN_DELAY = 4
-PAGE_LOAD_TIMEOUT = 8
 
-# Tags configuration
 TAGS_CONFIG = {
     'Following': '🔗 Following',
     'Followers': '⭐ Followers', 
-    'Bookmark': '🔖 Bookmark',
+    'Bookmark': '📖 Bookmark',
     'Pending': '⏳ Pending'
-}
-
-# Highlight color for changed cells only
-HIGHLIGHT_COLOR = {
-    "red": 1.0,
-    "green": 0.9,
-    "blue": 0.6
 }
 
 # === LOGGING ===
@@ -94,229 +106,291 @@ def log_msg(message, level="INFO"):
     color = colors.get(level, Fore.WHITE)
     print(f"{color}[{timestamp}] {level}: {message}{Style.RESET_ALL}")
 
-# === STATS TRACKING ===
+# === STATS ===
 class ScraperStats:
     def __init__(self):
         self.start_time = datetime.now()
         self.total = self.current = self.success = self.errors = 0
-        self.new_profiles = self.updated_cells = 0
-        self.tags_processed = 0
+        self.new_profiles = self.updated_profiles = 0
+        self.tags_processed = self.posts_scraped = 0
     
     def show_summary(self):
         elapsed = str(datetime.now() - self.start_time).split('.')[0]
         print(f"\n{Fore.MAGENTA}📊 FINAL SUMMARY:")
         print(f"⏱️  Total Time: {elapsed}")
-        print(f"👥 Users Found: {self.total}")
+        print(f"🎯 Target Users: {self.total}")
         print(f"✅ Successfully Scraped: {self.success}")
         print(f"❌ Errors: {self.errors}")
         print(f"🆕 New Profiles: {self.new_profiles}")
-        print(f"🔄 Updated Cells: {self.updated_cells}")
-        print(f"🏷️  Tags Processed: {self.tags_processed}{Style.RESET_ALL}")
-        print("-" * 50)
+        print(f"🔄 Updated Profiles: {self.updated_profiles}")
+        print(f"🏷️  Tags Processed: {self.tags_processed}")
+        print(f"📝 Posts Scraped: {self.posts_scraped}")
+        if self.total > 0:
+            completion_rate = (self.success / self.total * 100)
+            print(f"📈 Completion Rate: {completion_rate:.1f}%")
+        print(f"{Style.RESET_ALL}")
 
 stats = ScraperStats()
 
+# === DATE CONVERSION ===
+def convert_relative_date_to_absolute(relative_text):
+    """Convert '2 months ago' to 'dd-mmm-yy'"""
+    if not relative_text:
+        return ""
+    
+    relative_text = relative_text.lower().strip()
+    now = datetime.now()
+    
+    try:
+        match = re.search(r'(\d+)\s*(second|minute|hour|day|week|month|year)s?\s*ago', relative_text)
+        if match:
+            amount = int(match.group(1))
+            unit = match.group(2)
+            
+            if unit == 'second':
+                target_date = now - timedelta(seconds=amount)
+            elif unit == 'minute':
+                target_date = now - timedelta(minutes=amount)
+            elif unit == 'hour':
+                target_date = now - timedelta(hours=amount)
+            elif unit == 'day':
+                target_date = now - timedelta(days=amount)
+            elif unit == 'week':
+                target_date = now - timedelta(weeks=amount)
+            elif unit == 'month':
+                target_date = now - timedelta(days=amount * 30)
+            elif unit == 'year':
+                target_date = now - timedelta(days=amount * 365)
+            else:
+                return relative_text
+            
+            return target_date.strftime("%d-%b-%y")
+        return relative_text
+    except:
+        return relative_text
+
+def parse_post_timestamp(timestamp_text):
+    """Parse post timestamp to 'dd-mmm-yy hh:mm A/P'"""
+    if not timestamp_text:
+        return "N/A"
+    
+    timestamp_text = timestamp_text.strip()
+    now = datetime.now()
+    
+    try:
+        match = re.search(r'(\d+)\s*(second|minute|hour|day|week|month|year)s?\s*ago', timestamp_text.lower())
+        if match:
+            amount = int(match.group(1))
+            unit = match.group(2)
+            
+            if unit == 'second':
+                target_date = now - timedelta(seconds=amount)
+            elif unit == 'minute':
+                target_date = now - timedelta(minutes=amount)
+            elif unit == 'hour':
+                target_date = now - timedelta(hours=amount)
+            elif unit == 'day':
+                target_date = now - timedelta(days=amount)
+            elif unit == 'week':
+                target_date = now - timedelta(weeks=amount)
+            elif unit == 'month':
+                target_date = now - timedelta(days=amount * 30)
+            elif unit == 'year':
+                target_date = now - timedelta(days=amount * 365)
+            else:
+                return timestamp_text
+            
+            return target_date.strftime("%d-%b-%y %I:%M %p")
+        return timestamp_text
+    except:
+        return timestamp_text
+
 # === BROWSER SETUP ===
 def setup_github_browser():
-    """Optimized browser setup for GitHub Actions / headless runs"""
+    """Setup browser for GitHub Actions"""
     try:
-        log_msg("🚀 Setting up browser for GitHub Actions...")
-        
+        log_msg("🚀 Setting up browser...", "INFO")
         options = webdriver.ChromeOptions()
-        
-        # Headless + common flags
         options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
         options.add_argument("--window-size=1920,1080")
-        
-        # Performance optimizations
         options.add_argument("--disable-extensions")
-        options.add_argument("--disable-plugins")
-        options.add_argument("--disable-default-apps")
-        options.add_argument("--no-first-run")
-        options.add_argument("--disable-background-networking")
-        options.add_argument("--disable-sync")
-        options.add_argument("--disable-translate")
-        options.add_argument("--memory-pressure-off")
-        options.add_argument("--max_old_space_size=4096")
-        
-        # Anti-detection options
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        options.add_experimental_option('useAutomationExtension', False)
         options.add_argument("--log-level=3")
         
-        # Try system ChromeDriver first (some runners pre-install)
         try:
             service = Service()
             driver = webdriver.Chrome(service=service, options=options)
-        except Exception:
-            # Fallback to webdriver-manager
-            from webdriver_manager.chrome import ChromeDriverManager
+        except:
             service = Service(ChromeDriverManager().install())
             driver = webdriver.Chrome(service=service, options=options)
         
-        driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
-        
-        # Minimal anti-detect tweaks
-        try:
-            driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            driver.execute_script("Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]})")
-        except Exception:
-            # ignore if driver doesn't support execute_script at this time
-            pass
-        
+        driver.set_page_load_timeout(15)
+        driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
         log_msg("✅ Browser ready", "SUCCESS")
         return driver
-        
     except Exception as e:
         log_msg(f"❌ Browser setup failed: {e}", "ERROR")
         return None
 
 # === AUTHENTICATION ===
 def login_to_damadam(driver):
-    """Enhanced login with comprehensive debugging and multiple strategies"""
+    """Login to DamaDam"""
     try:
-        log_msg("🔐 Logging in to DamaDam...")
+        log_msg("🔐 Logging in...", "INFO")
         driver.get(LOGIN_URL)
-        
-        # Wait for page to load completely
         time.sleep(3)
         
-        # Debug: Check what page we're on
-        current_url = driver.current_url
-        page_title = driver.title
-        log_msg(f"📍 Current URL: {current_url}", "INFO")
-        log_msg(f"📄 Page title: {page_title}", "INFO")
-        
-        # Try multiple selectors for login form
         login_selectors = [
             {"nick": "#nick", "pass": "#pass", "button": "form button"},
-            {"nick": "input[name='nick']", "pass": "input[name='pass']", "button": "button[type='submit']"},
-            {"nick": "input[placeholder*='nick']", "pass": "input[type='password']", "button": ".btn"},
-            {"nick": "[name='username']", "pass": "[name='password']", "button": "input[type='submit']"},
+            {"nick": "input[name='nick']", "pass": "input[name='pass']", "button": "button[type='submit']"}
         ]
         
-        form_found = False
-        for i, selectors in enumerate(login_selectors):
+        for i, sel in enumerate(login_selectors):
             try:
-                log_msg(f"🔍 Trying login method {i+1}...", "INFO")
-                
-                WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, selectors["nick"]))
-                )
-                
-                nick_field = driver.find_element(By.CSS_SELECTOR, selectors["nick"])
-                pass_field = driver.find_element(By.CSS_SELECTOR, selectors["pass"])
-                submit_btn = driver.find_element(By.CSS_SELECTOR, selectors["button"])
-                
-                log_msg(f"✅ Found login form with method {i+1}", "SUCCESS")
+                WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, sel["nick"])))
+                nick_field = driver.find_element(By.CSS_SELECTOR, sel["nick"])
+                pass_field = driver.find_element(By.CSS_SELECTOR, sel["pass"])
+                submit_btn = driver.find_element(By.CSS_SELECTOR, sel["button"])
                 
                 nick_field.clear()
                 time.sleep(0.5)
                 nick_field.send_keys(USERNAME)
-                
                 pass_field.clear()
                 time.sleep(0.5)
                 pass_field.send_keys(PASSWORD)
-                
-                nick_value = nick_field.get_attribute('value')
-                pass_length = len(pass_field.get_attribute('value'))
-                log_msg(f"📝 Username filled: {nick_value[:3]}***", "INFO")
-                log_msg(f"📝 Password filled: {pass_length} characters", "INFO")
-                
                 submit_btn.click()
-                form_found = True
                 break
-                
-            except Exception as e:
-                log_msg(f"⚠️ Login method {i+1} failed: {e}", "WARNING")
+            except:
                 continue
-        
-        if not form_found:
-            log_msg("❌ No login form found with any method", "ERROR")
-            return False
         
         time.sleep(LOGIN_DELAY)
         
-        current_url_after = driver.current_url
-        log_msg(f"📍 URL after login: {current_url_after}", "INFO")
-        
-        success_indicators = [
-            lambda: "login" not in driver.current_url.lower(),
-            lambda: "dashboard" in driver.current_url.lower() or "profile" in driver.current_url.lower(),
-            lambda: any(driver.find_elements(By.CSS_SELECTOR, selector) for selector in [
-                "[href*='logout']", "[href*='profile']", ".user-menu", ".logout"
-            ]),
-            lambda: not any(driver.find_elements(By.CSS_SELECTOR, selector) for selector in [
-                "#nick", "input[name='nick']", ".login-form"
-            ])
-        ]
-        
-        login_success = False
-        for i, check in enumerate(success_indicators):
-            try:
-                if check():
-                    log_msg(f"✅ Login success indicator {i+1} passed", "SUCCESS")
-                    login_success = True
-                    break
-            except Exception as e:
-                log_msg(f"⚠️ Success check {i+1} failed: {e}", "WARNING")
-        
-        if login_success:
+        if "login" not in driver.current_url.lower():
             log_msg("✅ Login successful!", "SUCCESS")
             return True
         else:
             log_msg("❌ Login failed", "ERROR")
             return False
-            
     except Exception as e:
         log_msg(f"❌ Login error: {e}", "ERROR")
         return False
 
-# === USER FETCHING ===
-def get_online_users(driver):
-    """Get online users with better error handling"""
+# === TARGET USERS ===
+def get_target_users(client, sheet_url):
+    """Get target users from Target sheet"""
     try:
-        log_msg("👥 Fetching Online Users.✨.")
-        driver.get(ONLINE_USERS_URL)
+        log_msg("🎯 Loading target users...", "INFO")
+        workbook = client.open_by_url(sheet_url)
+        target_sheet = workbook.worksheet("Target")
+        target_data = target_sheet.get_all_values()
         
-        WebDriverWait(driver, PAGE_LOAD_TIMEOUT).until(
-            EC.presence_of_all_elements_located((By.CSS_SELECTOR, "li bdi"))
-        )
+        if not target_data or len(target_data) < 2:
+            log_msg("⚠️ Target sheet empty", "WARNING")
+            return []
         
-        users = []
-        elements = driver.find_elements(By.CSS_SELECTOR, "li bdi")
+        pending_users = []
+        for i, row in enumerate(target_data[1:], 2):
+            if len(row) >= 2:
+                username = row[0].strip()
+                status = row[1].strip().upper()
+                if username and status == 'PENDING':
+                    pending_users.append({'username': username, 'row_index': i})
         
-        for elem in elements:
-            username = elem.text.strip()
-            if username and username not in users:
-                users.append(username)
-        
-        log_msg(f"✅ Found {len(users)} unique online users", "SUCCESS")
-        return users
-        
+        log_msg(f"✅ Found {len(pending_users)} pending users", "SUCCESS")
+        return pending_users
     except Exception as e:
-        log_msg(f"❌ Failed to get users: {e}", "ERROR")
+        log_msg(f"❌ Failed to load targets: {e}", "ERROR")
         return []
+
+# === POST SCRAPING ===
+def scrape_recent_post(driver, nickname):
+    """Scrape recent post URL from /profile/public/{nickname}"""
+    post_url = f"https://damadam.pk/profile/public/{nickname}"
+    try:
+        log_msg(f"📝 Scraping post for {nickname}...", "INFO")
+        driver.get(post_url)
+        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CSS_SELECTOR, "article.mbl.bas-sh")))
+        
+        recent_post = driver.find_element(By.CSS_SELECTOR, "article.mbl.bas-sh")
+        post_data = {'LPOST': '', 'LDATE-TIME': ''}
+        
+        # Get post URL - Try multiple patterns for text and image posts
+        url_selectors = [
+            "a[href*='/content/']",           # Image posts: /content/42403588/g/
+            "a[href*='/comments/text/']",     # Text posts: /comments/text/42442215/29/
+            "a[href*='/comments/image/']",    # Image posts (alternative): /comments/image/42403588/29/
+        ]
+        
+        for sel in url_selectors:
+            try:
+                link_elem = recent_post.find_element(By.CSS_SELECTOR, sel)
+                href = link_elem.get_attribute('href')
+                if href:
+                    # Extract post ID and construct clean URL
+                    if '/content/' in href:
+                        # Image post - use as is
+                        post_data['LPOST'] = href if href.startswith('http') else f"https://damadam.pk{href}"
+                        break
+                    elif '/comments/text/' in href:
+                        # Text post - extract ID and make clean URL
+                        match = re.search(r'/comments/text/(\d+)/', href)
+                        if match:
+                            post_id = match.group(1)
+                            post_data['LPOST'] = f"https://damadam.pk/comments/text/{post_id}/"
+                            break
+                    elif '/comments/image/' in href:
+                        # Image post comment link - extract ID and make clean URL
+                        match = re.search(r'/comments/image/(\d+)/', href)
+                        if match:
+                            post_id = match.group(1)
+                            post_data['LPOST'] = f"https://damadam.pk/content/{post_id}/g/"
+                            break
+            except:
+                continue
+        
+        if not post_data['LPOST']:
+            post_data['LPOST'] = "[No Post URL]"
+        
+        # Get timestamp
+        time_selectors = ["time[itemprop='datePublished']", "time"]
+        for sel in time_selectors:
+            try:
+                elem = recent_post.find_element(By.CSS_SELECTOR, sel)
+                if elem.text.strip():
+                    post_data['LDATE-TIME'] = parse_post_timestamp(elem.text.strip())
+                    break
+            except:
+                continue
+        
+        if not post_data['LDATE-TIME']:
+            post_data['LDATE-TIME'] = "N/A"
+        
+        stats.posts_scraped += 1
+        log_msg(f"✅ Post URL: {post_data['LPOST']}", "SUCCESS")
+        return post_data
+    except TimeoutException:
+        log_msg(f"⏳ No posts for {nickname}", "WARNING")
+        return {'LPOST': '[No Posts]', 'LDATE-TIME': 'N/A'}
+    except Exception as e:
+        log_msg(f"❌ Post scrape failed: {e}", "ERROR")
+        return {'LPOST': '[Error]', 'LDATE-TIME': 'N/A'}
 
 # === PROFILE SCRAPING ===
 def scrape_profile(driver, nickname):
-    """Enhanced profile scraping with better data extraction"""
+    """Scrape profile with post data"""
     url = f"https://damadam.pk/users/{nickname}/"
     try:
         driver.get(url)
-        
-        WebDriverWait(driver, 8).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "h1.cxl.clb.lsp"))
-        )
+        WebDriverWait(driver, 12).until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1.cxl.clb.lsp")))
         
         now = datetime.now()
         data = {
             'DATETIME': now.strftime("%d-%b-%y %I:%M %p"),
             'NICKNAME': nickname,
-            'TAGS': '',  # Will be populated later
+            'TAGS': '',
             'CITY': '',
             'GENDER': '',
             'MARRIED': '',
@@ -324,367 +398,366 @@ def scrape_profile(driver, nickname):
             'JOINED': '',
             'FOLLOWERS': '',
             'POSTS': '',
+            'LPOST': '',
+            'LDATE-TIME': '',
             'PLINK': url,
             'PIMAGE': '',
             'INTRO': ''
         }
         
-        intro_selectors = [".ow span.nos", ".ow .nos", "span.nos"]
-        for selector in intro_selectors:
+        # Intro
+        for sel in [".ow span.nos", ".ow .nos", "span.nos"]:
             try:
-                intro_elem = driver.find_element(By.CSS_SELECTOR, selector)
-                if intro_elem.text.strip():
-                    data['INTRO'] = clean_text(intro_elem.text)
+                elem = driver.find_element(By.CSS_SELECTOR, sel)
+                if elem.text.strip():
+                    data['INTRO'] = clean_text(elem.text)
                     break
-            except:
-                continue
-            
-        fields_mapping = {
-            'City:': 'CITY',
-            'Gender:': 'GENDER', 
-            'Married:': 'MARRIED',
-            'Age:': 'AGE',
-            'Joined:': 'JOINED'
-        }
-        
-        for field_text, key in fields_mapping.items():
-            try:
-                xpath_patterns = [
-                    f"//b[contains(text(), '{field_text}')]/following-sibling::span[1]",
-                    f"//strong[contains(text(), '{field_text}')]/following-sibling::span[1]",
-                    f"//*[contains(text(), '{field_text}')]/following-sibling::span[1]"
-                ]
-                
-                for xpath in xpath_patterns:
-                    try:
-                        element = driver.find_element(By.XPATH, xpath)
-                        value = element.text.strip()
-                        if value:
-                            if key == "JOINED":
-                                data[key] = extract_numbers(value)
-                            else:
-                                data[key] = clean_text(value)
-                            break
-                    except:
-                        continue
             except:
                 pass
-                
-        follower_selectors = ["span.cl.sp.clb", ".cl.sp.clb", "span[class*='cl'][class*='sp']"]
-        for selector in follower_selectors:
+        
+        # Profile fields
+        fields = {'City:': 'CITY', 'Gender:': 'GENDER', 'Married:': 'MARRIED', 'Age:': 'AGE', 'Joined:': 'JOINED'}
+        for field_text, key in fields.items():
             try:
-                followers_elem = driver.find_element(By.CSS_SELECTOR, selector)
-                followers_match = re.search(r'(\d+)', followers_elem.text)
-                if followers_match:
-                    data['FOLLOWERS'] = followers_match.group(1)
+                xpath = f"//b[contains(text(), '{field_text}')]/following-sibling::span[1]"
+                elem = driver.find_element(By.XPATH, xpath)
+                value = elem.text.strip()
+                if value:
+                    data[key] = convert_relative_date_to_absolute(value) if key == "JOINED" else clean_text(value)
+            except:
+                pass
+        
+        # Followers
+        for sel in ["span.cl.sp.clb", ".cl.sp.clb"]:
+            try:
+                elem = driver.find_element(By.CSS_SELECTOR, sel)
+                match = re.search(r'(\d+)', elem.text)
+                if match:
+                    data['FOLLOWERS'] = match.group(1)
                     break
             except:
-                continue
-            
-        posts_selectors = [
-            "a[href*='/profile/public/'] button div:first-child",
-            "a[href*='profile'] button div",
-            "button div:first-child"
-        ]
-        for selector in posts_selectors:
+                pass
+        
+        # Posts count
+        for sel in ["a[href*='/profile/public/'] button div:first-child", "a[href*='/profile/public/'] button div"]:
             try:
-                posts_elem = driver.find_element(By.CSS_SELECTOR, selector)
-                posts_text = clean_text(posts_elem.text)
-                if posts_text and posts_text.isdigit():
-                    data['POSTS'] = posts_text
+                elem = driver.find_element(By.CSS_SELECTOR, sel)
+                match = re.search(r'(\d+)', elem.text)
+                if match:
+                    data['POSTS'] = match.group(1)
                     break
             except:
-                continue
-            
-        img_selectors = ["img[src*='avatar-imgs']", "img[src*='avatar']", ".profile-img img"]
-        for selector in img_selectors:
+                pass
+        
+        # Profile image
+        for sel in ["img[src*='avatar-imgs']", "img[src*='avatar']"]:
             try:
-                img_elem = driver.find_element(By.CSS_SELECTOR, selector)
-                data['PIMAGE'] = img_elem.get_attribute('src')
+                elem = driver.find_element(By.CSS_SELECTOR, sel)
+                data['PIMAGE'] = elem.get_attribute('src')
                 break
             except:
-                continue
-            
-        return data
+                pass
         
+        # Recent post
+        time.sleep(1)
+        post_data = scrape_recent_post(driver, nickname)
+        data['LPOST'] = post_data['LPOST']
+        data['LDATE-TIME'] = post_data['LDATE-TIME']
+        
+        return data
     except Exception as e:
         log_msg(f"❌ Failed to scrape {nickname}: {e}", "ERROR")
         return None
 
-# === UTILITY FUNCTIONS ===
+# === UTILITIES ===
 def clean_text(text):
-    """Enhanced text cleaning"""
-    if not text: 
+    """Clean text"""
+    if not text:
         return ""
-    text = str(text).strip().replace('\xa0', ' ').replace('+', '').replace('\n', ' ')
-    
-    placeholder_texts = ['not set', 'no set', 'no city', 'none', 'n/a', 'null']
-    if text.lower() in placeholder_texts: 
-        return ""
-    
+    text = str(text).strip().replace('\xa0', ' ').replace('\n', ' ')
     return re.sub(r'\s+', ' ', text).strip()
 
-def extract_numbers(text):
-    """Extract numbers from text with better formatting"""
-    if not text: 
-        return ""
-    numbers = re.findall(r'\d+', str(text))
-    return ', '.join(numbers) if numbers else clean_text(text)
-
-# === GOOGLE SHEETS OPERATIONS ===
+# === GOOGLE SHEETS ===
 def get_google_sheets_client():
-    """Setup Google Sheets client"""
+    """Setup Google Sheets"""
     try:
-        google_creds = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON')
-        if not google_creds:
-            raise Exception("Missing GOOGLE_SERVICE_ACCOUNT_JSON")
-            
-        creds_dict = json.loads(google_creds)
-        scope = ["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"]
+        creds_dict = json.loads(os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON'))
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        client = gspread.authorize(creds)
-        
-        return client
+        return gspread.authorize(creds)
     except Exception as e:
-        log_msg(f"❌ Failed to setup Google Sheets client: {e}", "ERROR")
+        log_msg(f"❌ Sheets client failed: {e}", "ERROR")
         return None
 
 def get_tags_mapping(client, sheet_url):
-    """Get tags mapping from Tags sheet"""
+    """Get tags from Tags sheet"""
     try:
-        log_msg("🏷️ Loading tags mapping...")
+        log_msg("🏷️ Loading tags...", "INFO")
         workbook = client.open_by_url(sheet_url)
-        
-        try:
-            tags_sheet = workbook.worksheet("Tags")
-        except:
-            log_msg("⚠️ Tags sheet not found, skipping tags", "WARNING")
-            return {}
-        
+        tags_sheet = workbook.worksheet("Tags")
         tags_data = tags_sheet.get_all_values()
+        
         if not tags_data:
             return {}
         
         tags_mapping = {}
-        headers = tags_data[0] if tags_data else []
-        
-        for col_index, header in enumerate(headers):
+        headers = tags_data[0]
+        for col_idx, header in enumerate(headers):
             if header.strip():
-                tag_icon = TAGS_CONFIG.get(header.strip(), f"📌 {header.strip()}")
+                tag_icon = TAGS_CONFIG.get(header.strip(), f"🔌 {header.strip()}")
                 for row in tags_data[1:]:
-                    if col_index < len(row) and row[col_index].strip():
-                        nickname = row[col_index].strip()
-                        if nickname not in tags_mapping:
-                            tags_mapping[nickname] = []
-                        tags_mapping[nickname].append(tag_icon)
+                    if col_idx < len(row) and row[col_idx].strip():
+                        nick = row[col_idx].strip()
+                        if nick not in tags_mapping:
+                            tags_mapping[nick] = []
+                        tags_mapping[nick].append(tag_icon)
         
         stats.tags_processed = len(tags_mapping)
-        log_msg(f"✅ Loaded tags for {len(tags_mapping)} users", "SUCCESS")
+        log_msg(f"✅ Loaded {len(tags_mapping)} tags", "SUCCESS")
         return tags_mapping
-        
-    except Exception as e:
-        log_msg(f"❌ Failed to load tags: {e}", "ERROR")
+    except:
+        log_msg("⚠️ Tags sheet not found", "WARNING")
         return {}
 
 def get_tags_for_nickname(nickname, tags_mapping):
-    """Get tags string for a nickname"""
+    """Get tags string"""
     if not tags_mapping or nickname not in tags_mapping:
         return ""
-    
-    tags = tags_mapping[nickname]
-    return ", ".join(tags) if tags else ""
+    return ", ".join(tags_mapping[nickname])
 
-def export_to_google_sheets(profiles_batch, tags_mapping):
-    """SIMPLIFIED Google Sheets export - no duplicates, top insertion, cell highlighting"""
-    if not profiles_batch:
+def export_to_google_sheets_with_rate_limiting(profiles_batch, tags_mapping, target_updates=None):
+    """Export with rate limiting"""
+    if not profiles_batch and not target_updates:
         return False
-        
+    
     try:
-        log_msg(f"📊 Processing {len(profiles_batch)} profiles for Google Sheets...", "INFO")
-        
+        log_msg("📊 Exporting to Google Sheets...", "INFO")
         client = get_google_sheets_client()
         if not client:
             return False
-            
+        
         workbook = client.open_by_url(SHEET_URL)
+        
+        # Update target statuses
+        if target_updates:
+            try:
+                target_sheet = workbook.worksheet("Target")
+                for update in target_updates:
+                    try:
+                        track_api_request()
+                        row_idx = update['row_index']
+                        status = update['status']
+                        notes = update.get('notes', '')
+                        
+                        update_range = f'B{row_idx}:D{row_idx}'
+                        update_values = [status]
+                        update_values.append(datetime.now().strftime("%Y-%m-%d %H:%M") if status.upper() == 'COMPLETED' else '')
+                        update_values.append(notes)
+                        
+                        target_sheet.update(update_range, [update_values])
+                        time.sleep(GOOGLE_API_RATE_LIMIT['request_delay'])
+                    except Exception as e:
+                        if "429" in str(e):
+                            time.sleep(65)
+                            target_sheet.update(update_range, [update_values])
+                log_msg(f"✅ Updated {len(target_updates)} target statuses", "SUCCESS")
+            except Exception as e:
+                log_msg(f"⚠️ Target update failed: {e}", "WARNING")
+        
+        if not profiles_batch:
+            return True
+        
+        # Main worksheet
         worksheet = workbook.sheet1
+        headers = ["DATETIME","NICKNAME","TAGS","CITY","GENDER","MARRIED","AGE","JOINED","FOLLOWERS","POSTS","LPOST","LDATE-TIME","PLINK","PIMAGE","INTRO"]
         
-        # Setup headers (DATETIME combined)
-        headers = ["DATETIME","NICKNAME","TAGS","CITY","GENDER","MARRIED","AGE",
-                   "JOINED","FOLLOWERS","POSTS","PLINK","PIMAGE","INTRO"]
-        
+        track_api_request()
         existing_data = worksheet.get_all_values()
-        if not existing_data or not existing_data[0]: 
+        
+        if not existing_data or not existing_data[0]:
+            track_api_request()
             worksheet.append_row(headers)
-            log_msg("✅ Headers added to Google Sheet", "SUCCESS")
+            log_msg("✅ Headers added", "SUCCESS")
             existing_rows = {}
         else:
             existing_rows = {}
-            for i, row in enumerate(existing_data[1:], 2):  # Skip header, start from row 2
-                if len(row) > 1 and row[1].strip():  # Nickname is column B (index 1)
-                    existing_rows[row[1].strip()] = {
-                        'row_index': i,
-                        'data': row
-                    }
+            for i, row in enumerate(existing_data[1:], 2):
+                if len(row) > 1 and row[1].strip():
+                    existing_rows[row[1].strip()] = {'row_index': i, 'data': row}
         
-        new_count = 0
-        updated_cells_count = 0
+        new_count = updated_count = 0
         
         for profile in profiles_batch:
-            nickname = profile.get("NICKNAME","").strip()
-            if not nickname: 
-                continue
-            
-            profile['TAGS'] = get_tags_for_nickname(nickname, tags_mapping)
-            
-            row = [
-                profile.get("DATETIME",""),
-                nickname,
-                profile.get("TAGS",""),
-                profile.get("CITY",""),
-                profile.get("GENDER",""),
-                profile.get("MARRIED",""),
-                profile.get("AGE",""),
-                profile.get("JOINED",""),
-                profile.get("FOLLOWERS",""),
-                profile.get("POSTS",""),
-                profile.get("PLINK",""),
-                profile.get("PIMAGE",""),
-                clean_text(profile.get("INTRO",""))
-            ]
-            
-            if nickname in existing_rows:
-                existing_info = existing_rows[nickname]
-                row_index = existing_info['row_index']
-                existing_data = existing_info['data']
+            try:
+                nickname = profile.get("NICKNAME", "").strip()
+                if not nickname:
+                    continue
                 
-                col_letters = ['A','B','C','D','E','F','G','H','I','J','K','L','M']
+                profile['TAGS'] = get_tags_for_nickname(nickname, tags_mapping)
                 
-                updated_any = False
-                for col_idx, new_value in enumerate(row):
-                    existing_value = existing_data[col_idx] if col_idx < len(existing_data) else ""
+                row = [
+                    profile.get("DATETIME", ""),
+                    nickname,
+                    profile.get("TAGS", ""),
+                    profile.get("CITY", ""),
+                    profile.get("GENDER", ""),
+                    profile.get("MARRIED", ""),
+                    profile.get("AGE", ""),
+                    profile.get("JOINED", ""),
+                    profile.get("FOLLOWERS", ""),
+                    profile.get("POSTS", ""),
+                    profile.get("LPOST", ""),
+                    profile.get("LDATE-TIME", ""),
+                    profile.get("PLINK", ""),
+                    profile.get("PIMAGE", ""),
+                    clean_text(profile.get("INTRO", ""))
+                ]
+                
+                if nickname in existing_rows:
+                    info = existing_rows[nickname]
+                    row_index = info['row_index']
+                    old_row = info['data']
                     
-                    # Always update DATETIME (column A)
-                    if col_idx == 0:  
-                        if existing_value != new_value:
-                            cell_range = f"{col_letters[col_idx]}{row_index}"
-                            worksheet.update(cell_range, new_value)
-                            updated_any = True
+                    needs_update = False
+                    for idx in [3,4,5,6,7,8,9,10,11,14]:
+                        old_val = old_row[idx] if idx < len(old_row) else ""
+                        new_val = row[idx] if idx < len(row) else ""
+                        if old_val != new_val and new_val:
+                            needs_update = True
+                            break
                     
-                    # Update other fields only if new value exists and is different
-                    elif new_value and existing_value != new_value:
-                        cell_range = f"{col_letters[col_idx]}{row_index}"
-                        worksheet.update(cell_range, new_value)
-                        
-                        # Highlight only the changed cell
+                    if not needs_update:
+                        old_tags = old_row[2] if len(old_row) > 2 else ""
+                        if old_tags != row[2]:
+                            needs_update = True
+                    
+                    if needs_update:
                         try:
-                            worksheet.format(cell_range, {
-                                "backgroundColor": HIGHLIGHT_COLOR
-                            })
-                        except Exception:
-                            # formatting optional; ignore if API complains
-                            pass
-                        
-                        updated_cells_count += 1
-                        stats.updated_cells += 1
-                        updated_any = True
-                        header_label = headers[col_idx] if col_idx < len(headers) else f"COL{col_idx}"
-                        log_msg(f"🔄 Updated {nickname} - {header_label}: {new_value}", "INFO")
-                
-                if not updated_any:
-                    log_msg(f"➡️ {nickname} - No changes needed", "INFO")
-                    
-            else:
-                try:
-                    worksheet.insert_row(row, 2)
-                    new_count += 1
-                    stats.new_profiles += 1
-                    log_msg(f"✅ Added new profile at top: {nickname}", "SUCCESS")
-                except Exception as e:
-                    log_msg(f"❌ Failed to add {nickname}: {e}", "ERROR")
+                            track_api_request()
+                            worksheet.update(f'A{row_index}:O{row_index}', [row])
+                            updated_count += 1
+                            stats.updated_profiles += 1
+                            log_msg(f"🔄 Updated {nickname}", "INFO")
+                            time.sleep(GOOGLE_API_RATE_LIMIT['request_delay'])
+                        except Exception as e:
+                            if "429" in str(e):
+                                time.sleep(65)
+                                worksheet.update(f'A{row_index}:O{row_index}', [row])
+                                updated_count += 1
+                    else:
+                        log_msg(f"➡️ {nickname} - No changes", "INFO")
+                else:
+                    try:
+                        track_api_request()
+                        worksheet.append_row(row)
+                        new_count += 1
+                        stats.new_profiles += 1
+                        log_msg(f"✅ Added {nickname}", "SUCCESS")
+                        time.sleep(GOOGLE_API_RATE_LIMIT['request_delay'])
+                    except Exception as e:
+                        if "429" in str(e):
+                            time.sleep(65)
+                            worksheet.append_row(row)
+                            new_count += 1
+            except Exception as e:
+                log_msg(f"❌ Error processing {nickname}: {e}", "ERROR")
         
-        log_msg(f"📊 Export complete: {new_count} new, {updated_cells_count} cells updated", "SUCCESS")
+        log_msg(f"📊 Export complete: {new_count} new, {updated_count} updated", "SUCCESS")
         return True
-        
     except Exception as e:
-        log_msg(f"❌ Google Sheets export failed: {e}", "ERROR")
+        log_msg(f"❌ Export failed: {e}", "ERROR")
         return False
 
-# === MAIN EXECUTION ===
+# === MAIN ===
 def main():
-    """Simplified main execution"""
-    log_msg("🚀 Starting DamaDam Profile Scraper (Simplified)", "INFO")
+    """Main execution"""
+    log_msg("🚀 Starting Enhanced Scraper", "INFO")
     
-    # Setup browser
     driver = setup_github_browser()
     if not driver:
-        log_msg("❌ Failed to setup browser", "ERROR")
         return
     
     try:
-        # Login
         if not login_to_damadam(driver):
-            log_msg("❌ Authentication failed", "ERROR")
             return
         
-        # Get Google Sheets client and tags mapping
         client = get_google_sheets_client()
         if not client:
-            log_msg("❌ Failed to connect to Google Sheets", "ERROR")
             return
-            
+        
         tags_mapping = get_tags_mapping(client, SHEET_URL)
+        target_users = get_target_users(client, SHEET_URL)
         
-        # Get online users
-        users = get_online_users(driver)
-        if not users:
-            log_msg("❌ No online users found", "ERROR")
+        if not target_users:
+            log_msg("❌ No target users found", "ERROR")
             return
         
-        stats.total = len(users)
+        stats.total = len(target_users)
         scraped_profiles = []
-        batch_size = 10
+        target_updates = []
+        batch_size = GOOGLE_API_RATE_LIMIT['batch_size']
         
-        # Scrape profiles with batch processing
-        for i, nickname in enumerate(users, 1):
+        log_msg(f"🎯 Processing {stats.total} users...", "INFO")
+        
+        for i, target_user in enumerate(target_users, 1):
             stats.current = i
+            nickname = target_user['username']
+            row_index = target_user['row_index']
             
-            log_msg(f"🔍 Scraping {nickname} ({i}/{stats.total})", "INFO")
-            profile = scrape_profile(driver, nickname)
+            log_msg(f"🔍 Scraping: {nickname} ({i}/{stats.total})", "INFO")
             
-            if profile:
-                scraped_profiles.append(profile)
-                stats.success += 1
+            try:
+                profile = scrape_profile(driver, nickname)
                 
-                # Export in batches
-                if len(scraped_profiles) >= batch_size:
-                    export_to_google_sheets(scraped_profiles, tags_mapping)
-                    scraped_profiles = []  # Clear batch
-                    
-            else:
+                if profile:
+                    scraped_profiles.append(profile)
+                    stats.success += 1
+                    target_updates.append({
+                        'row_index': row_index,
+                        'status': 'Completed',
+                        'notes': 'Successfully scraped'
+                    })
+                else:
+                    stats.errors += 1
+                    target_updates.append({
+                        'row_index': row_index,
+                        'status': 'Pending',
+                        'notes': 'Failed - will retry'
+                    })
+                
+                if len(scraped_profiles) >= batch_size or len(target_updates) >= batch_size:
+                    log_msg(f"📤 Exporting batch of {len(scraped_profiles)} profiles...", "INFO")
+                    if export_to_google_sheets_with_rate_limiting(scraped_profiles, tags_mapping, target_updates):
+                        scraped_profiles = []
+                        target_updates = []
+                        time.sleep(10)
+                    else:
+                        log_msg("⚠️ Export failed, keeping data for retry", "WARNING")
+            except Exception as e:
                 stats.errors += 1
+                log_msg(f"❌ Error: {e}", "ERROR")
+                target_updates.append({
+                    'row_index': row_index,
+                    'status': 'Pending',
+                    'notes': f'Error: {str(e)[:100]}'
+                })
             
-            # Smart delay to avoid detection
-            delay = random.uniform(MIN_DELAY, MAX_DELAY)
-            time.sleep(delay)
+            time.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
         
-        # Export remaining profiles
-        if scraped_profiles:
-            export_to_google_sheets(scraped_profiles, tags_mapping)
+        if scraped_profiles or target_updates:
+            export_to_google_sheets_with_rate_limiting(scraped_profiles, tags_mapping, target_updates)
         
-        # Final summary
         stats.show_summary()
-        
-    except KeyboardInterrupt:
-        log_msg("⏹️ Scraping interrupted by user", "WARNING")
+        log_msg(f"🎯 Completed: {stats.success}/{stats.total}", "INFO")
+        log_msg(f"📝 Posts Scraped: {stats.posts_scraped}", "INFO")
     except Exception as e:
-        log_msg(f"❌ Execution error: {e}", "ERROR")
+        log_msg(f"❌ Error: {e}", "ERROR")
     finally:
         try:
             driver.quit()
         except:
             pass
-        log_msg("🏁 Scraper completed", "INFO")
+        log_msg("🏁 Done", "INFO")
 
 if __name__ == "__main__":
     main()
