@@ -98,8 +98,8 @@ TAGS_CONFIG = {
     'Pending': '⏳ Pending'
 }
 
-# Placeholder texts to replace with blank
-PLACEHOLDER_TEXTS = ['not set', 'no city', 'no set', 'none', 'n/a', 'null']
+# Placeholder texts to replace with blank (lowercase for comparison)
+PLACEHOLDER_TEXTS = ['not set', 'no city', 'no set', 'none', 'n/a', 'null', 'no age']
 
 # === LOGGING ===
 def log_msg(message, level="INFO"):
